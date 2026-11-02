@@ -7,6 +7,7 @@ import BbtQuickGenerator from './BbtQuickGenerator';
 import { createVariantSession, generateVariantStep1, generateVariantNextStep, cloneVariantSession, countVariantQuestions } from '../services/variantsExamService';
 import { exportToDoc } from '../services/exportUtils';
 import MathFormatSelect from './MathFormatSelect';
+import ShuffleExamPanel from './ShuffleExamPanel';
 import { VariantFileData, VariantState } from '../types';
 import { getApiKey, getFriendlyGeminiErrorMessage, parseApiError, getAiProvider, getGeminiModelsToTry, getSelectedModel, setFallbackNotice, UserFacingError } from '../services/geminiService';
 import { prepareExamSourceParts, isDocxSource } from '../services/examSourceService';
@@ -346,6 +347,16 @@ const VariantsExamPage: React.FC<VariantsExamPageProps> = ({ checkAuth }) => {
           ]}
         />
       )}
+
+      {/* Đảo đề: tạo nhiều mã đề + file đáp án từ một trong các đề đã sinh xong */}
+      {(() => {
+        const finished = [col1, col2, col3]
+          .map((exam, i) => ({ id: `col${i + 1}`, label: `Đề ${i + 1}`, exam, done: !!exam && (state > STEP_STATES[i] || (state === VariantState.ERROR && failedStep !== null && i + 1 < failedStep)) }))
+          .filter(d => d.done);
+        return finished.length > 0 ? (
+          <ShuffleExamPanel className="mb-4" documents={finished} baseName={file ? file.name.replace(/\.[^/.]+$/, '') : 'De_bien_the'} />
+        ) : null;
+      })()}
 
       {/* 3 Column Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0">

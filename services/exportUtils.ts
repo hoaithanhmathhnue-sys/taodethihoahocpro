@@ -11,7 +11,7 @@ const md = new MarkdownIt({
   linkify: true
 });
 
-export const exportToDoc = async (content: string, fileName: string) => {
+const buildWordHtml = async (content: string, fileName: string): Promise<string> => {
   let fullHtml = '';
   const { text: contentWithoutFigures, figures } = extractFiguresToPlaceholders(content);
   const cleanedContent = contentWithoutFigures.replace(/^```html\s*/i, '').replace(/\s*```$/i, '').trim();
@@ -109,9 +109,20 @@ export const exportToDoc = async (content: string, fileName: string) => {
   fullHtml = prepareMathForWord(fullHtml);
 
   // Chuyển các hình vẽ (BBT, đồ thị, hình 3D) thành ảnh PNG 200 DPI nhúng vào Word
-  fullHtml = await restoreFiguresAsPngForWord(fullHtml, figures, 200);
+  return restoreFiguresAsPngForWord(fullHtml, figures, 200);
+};
 
+/** Tạo file Word (không tải xuống) — dùng khi cần gộp nhiều file, ví dụ đảo đề. */
+export const contentToDocxBlob = async (content: string, fileName: string): Promise<Blob> =>
+  (await asBlob(await buildWordHtml(content, fileName), {
+    orientation: 'portrait',
+    margins: { top: 720, right: 720, bottom: 720, left: 720 }
+  })) as Blob;
+
+export const exportToDoc = async (content: string, fileName: string) => {
+  let fullHtml = '';
   try {
+    fullHtml = await buildWordHtml(content, fileName);
     const blob = await asBlob(fullHtml, {
       orientation: 'portrait',
       margins: { top: 720, right: 720, bottom: 720, left: 720 }

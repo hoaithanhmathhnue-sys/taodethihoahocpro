@@ -25,18 +25,18 @@ export interface ExamStructure {
   hasAnswerSection: boolean;
 }
 
-const PART_RE = /^\s*(?:PHẦN|Phần)\s+(IV|III|II|I|[1-4])(?![A-Za-z0-9])[.:\s–-]*(.*)$/;
+export const PART_RE = /^\s*(?:PHẦN|Phần)\s+(IV|III|II|I|[1-4])(?![A-Za-z0-9])[.:\s–-]*(.*)$/;
 // Đề Tiếng Anh: PART A / SECTION I … — số thứ tự phần KHÔNG phải dạng câu hỏi
-const EN_PART_RE = /^\s*(?:PART|Part|SECTION|Section)\s+([A-Z]|[IVX]+|\d+)\b[.:\s–-]*(.*)$/;
-const ESSAY_HEADING_RE = /^\s*(?:[A-D]|[IVX]+)\s*[.:]\s*(?:PHẦN\s+)?TỰ\s*LUẬN\b/i;
+export const EN_PART_RE = /^\s*(?:PART|Part|SECTION|Section)\s+([A-Z]|[IVX]+|\d+)\b[.:\s–-]*(.*)$/;
+export const ESSAY_HEADING_RE = /^\s*(?:[A-D]|[IVX]+)\s*[.:]\s*(?:PHẦN\s+)?TỰ\s*LUẬN\b/i;
 // Kiểu tiêu đề "I. Trắc nghiệm nhiều lựa chọn", "II. ĐÚNG – SAI", "C. Trả lời ngắn"
-const ALT_PART_RE = /^\s*(?:[A-D]|[IVX]+)\s*[.:]\s*(?:câu\s*)?(?:trắc\s*nghiệm\s*)?(?:câu\s*hỏi\s*)?(nhiều\s*(?:phương\s*án\s*)?lựa\s*chọn|đúng\s*[-–\/]?\s*sai|trả\s*lời\s*ngắn|tự\s*luận)/i;
-const QUESTION_RE = /^\s*(?:Câu|Question)\s+(\d{1,3})(?:\s*\([^)]*\))?\s*[.:)\-–]/i;
-const ANSWER_RE = /^\s*(?:[A-ZĐ]\s*[.:]\s*|[IVX]+\s*[.:]\s*|PHẦN\s+[IVX]+\s*[.:]?\s*)?(?:BẢNG\s*)?(ĐÁP\s*ÁN|HƯỚNG\s*DẪN\s*(?:CHẤM|GIẢI)|LỜI\s*GIẢI|ANSWER\s*KEYS?|ANSWERS\b|KEYS?\b\s*$)/i;
+export const ALT_PART_RE = /^\s*(?:[A-D]|[IVX]+)\s*[.:]\s*(?:câu\s*)?(?:trắc\s*nghiệm\s*)?(?:câu\s*hỏi\s*)?(nhiều\s*(?:phương\s*án\s*)?lựa\s*chọn|đúng\s*[-–\/]?\s*sai|trả\s*lời\s*ngắn|tự\s*luận)/i;
+export const QUESTION_RE = /^\s*(?:Câu|Question)\s+(\d{1,3})(?:\s*\([^)]*\))?\s*[.:)\-–]/i;
+export const ANSWER_RE = /^\s*(?:[A-ZĐ]\s*[.:]\s*|[IVX]+\s*[.:]\s*|PHẦN\s+(?:[IVX]+|\d+)\s*[.:]?\s*)?(?:BẢNG\s*)?(ĐÁP\s*ÁN|HƯỚNG\s*DẪN\s*(?:CHẤM|GIẢI)|LỜI\s*GIẢI|ANSWER\s*KEYS?|ANSWERS\b|KEYS?\b\s*$)/i;
 
 const ROMAN_TO_TYPE: Record<string, QType> = { I: 'I', II: 'II', III: 'III', IV: 'IV', '1': 'I', '2': 'II', '3': 'III', '4': 'IV' };
 
-const partTypeOf = (roman: string, rest: string): QType | null => {
+export const partTypeOf = (roman: string, rest: string): QType | null => {
   const t = rest.toLowerCase();
   if (/đúng\s*[-–\/]?\s*sai/.test(t)) return 'II';
   if (/trả\s*lời\s*ngắn/.test(t)) return 'III';

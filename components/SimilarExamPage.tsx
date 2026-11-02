@@ -6,6 +6,7 @@ import BbtQuickGenerator from './BbtQuickGenerator';
 import { generateSimilarExam } from '../services/similarExamService';
 import { exportToDoc } from '../services/exportUtils';
 import MathFormatSelect from './MathFormatSelect';
+import ShuffleExamPanel from './ShuffleExamPanel';
 import { SimilarExamResult, SimilarExamFileData, DiagramMode, SolutionMode } from '../types';
 import { getSelectedModel } from '../services/geminiService';
 import { prepareExamSourceParts, isDocxSource } from '../services/examSourceService';
@@ -351,6 +352,15 @@ const SimilarExamPage: React.FC<SimilarExamPageProps> = ({ checkAuth }) => {
             <div className="mb-4 p-3 rounded-xl bg-teal-50 border border-teal-100 text-teal-700 text-sm">
               Đang tạo đề mới… Kết quả hiện tại vẫn được giữ nguyên cho tới khi có đề mới.
             </div>
+          )}
+
+          {/* Đảo đề: tạo nhiều mã đề + file đáp án từ đề vừa sinh */}
+          {!isGenerating && result?.examContent && (
+            <ShuffleExamPanel
+              className="mb-4"
+              documents={[{ id: 'exam', label: 'Đề thi', exam: result.examContent, answers: result.detailedSolution }]}
+              baseName={fileData?.name?.replace(/\.[^/.]+$/, '') || 'De_tuong_tu'}
+            />
           )}
 
           {/* Toolbar */}

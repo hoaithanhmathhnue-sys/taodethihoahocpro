@@ -15,6 +15,7 @@ import type { ExamIssue } from './services/examValidator';
 import { renderMarkdownPreservingMath } from './services/mathExportUtils';
 import { prepareMathForWord } from './services/wordEquation';
 import MathFormatSelect from './components/MathFormatSelect';
+import ShuffleExamPanel from './components/ShuffleExamPanel';
 import { extractFiguresToPlaceholders, restoreFiguresAsPngForWord } from './services/figureEngine';
 // @ts-ignore
 import { asBlob } from 'html-docx-js-typescript';
@@ -1925,6 +1926,15 @@ const App: React.FC = () => {
 
       {/* Kết quả kiểm tra tự động đề vừa sinh (Bước 4) */}
       {currentStep === AppStep.EXAM && examCheck && renderExamCheckBanner()}
+
+      {/* Đảo đề: tạo nhiều mã đề + file đáp án từ đề vừa sinh */}
+      {isLastStep && content && !genState.isLoading && (
+        <ShuffleExamPanel
+          className="mb-4"
+          documents={[{ id: 'exam', label: 'Đề thi', exam: content }]}
+          baseName={`De_${inputData.subject}_${inputData.grade}`.replace(/\s+/g, '_')}
+        />
+      )}
 
       {/* Reference Document Upload - Only for SPECS step */}
       {currentStep === AppStep.SPECS && (
