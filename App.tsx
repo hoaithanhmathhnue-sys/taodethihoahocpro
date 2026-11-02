@@ -35,13 +35,8 @@ const App: React.FC = () => {
   const [completedSteps, setCompletedSteps] = useState<number>(0);
 
   // -- App Mode State --
-  const [appMode, setAppMode] = useState<AppMode>(() => {
-    return (localStorage.getItem('examcraft_app_mode') as AppMode) || 'home';
-  });
-
-  useEffect(() => {
-    localStorage.setItem('examcraft_app_mode', appMode);
-  }, [appMode]);
+  // Luôn mở app ở trang chủ (chọn chế độ), không nhớ chế độ của lần dùng trước
+  const [appMode, setAppMode] = useState<AppMode>('home');
 
   // -- Data State --
   const [inputData, setInputData] = useState<InputData>({
