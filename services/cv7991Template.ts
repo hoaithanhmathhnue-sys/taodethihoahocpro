@@ -61,6 +61,7 @@ const fmtPct = (n: number): string => fmtVN(n, 0);
 
 /**
  * Tính thang điểm theo CV 7991 + quy tắc hiện có của app (SYSTEM_INSTRUCTION):
+ *  - Cấu hình có pointScheme (loại đề đã chọn): dùng đúng thang đó, ví dụ đề Tốt nghiệp I 4,5 – II 4,0 – III 1,5
  *  - Có tự luận: I 3,0 – II 2,0 – III 2,0 – IV 3,0
  *  - Không tự luận: I 3,0 – II 4,0 – III 3,0
  *  - Dạng có 0 câu: không tạo cột; điểm của "Trả lời ngắn" chuyển sang "Đúng – Sai"
@@ -75,9 +76,11 @@ export const computeCv7991Layout = (config: QuestionConfig, allowEssay: boolean)
     };
     const hasEssay = counts.essay > 0;
     const type2LevelTotals = getDungSaiLevelTotals(config);
-    const target: Record<Cv7991TypeKey, number> = hasEssay
-        ? { type1: 3, type2: 2, type3: 2, essay: 3 }
-        : { type1: 3, type2: 4, type3: 3, essay: 0 };
+    const target: Record<Cv7991TypeKey, number> = config.pointScheme
+        ? { ...config.pointScheme }
+        : hasEssay
+            ? { type1: 3, type2: 2, type3: 2, essay: 3 }
+            : { type1: 3, type2: 4, type3: 3, essay: 0 };
 
     const order: Cv7991TypeKey[] = ['type2', 'type1', 'type3', 'essay'];
     (['type3', 'type1', 'type2', 'essay'] as Cv7991TypeKey[]).forEach(k => {
@@ -199,8 +202,7 @@ export const buildCv7991SpecsFooterTemplate = (layout: Cv7991Layout): string => 
 export interface CompetencyItem { code: string; name: string }
 
 const SUBJECT_COMPETENCY_CODES: Record<string, string[]> = {
-    'Toán': ['TD', 'MH', 'GQ'],
-    'Toán học': ['TD', 'MH', 'GQ'],
+    'Hóa học': ['NT', 'TT', 'VD'],
 };
 
 export const getCv7991Competencies = (subject: string, footnotes: string): CompetencyItem[] => {
@@ -233,6 +235,8 @@ interface PromptCommon {
 }
 
 const examLabels = (data: InputData) => {
+    if (/tốt\s*nghiệp/i.test(data.examType)) return { examTypeLabel: 'ÔN THI TỐT NGHIỆP THPT', semesterNum: '' };
+    if (/thường\s*xuyên/i.test(data.examType)) return { examTypeLabel: 'THƯỜNG XUYÊN', semesterNum: '' };
     const isGiuaKy = data.examType.includes('Giữa');
     return {
         examTypeLabel: isGiuaKy ? 'GIỮA HỌC KÌ' : 'CUỐI KÌ',
@@ -260,6 +264,7 @@ const codeRules = (layout: Cv7991Layout): string => {
         if (t.key === 'type3') lines.push(`  - Trả lời ngắn: mã "III.1", "III.2", ... đến "III.${t.questions}".`);
         if (t.key === 'essay') lines.push(`  - Tự luận: mã "IV.1", "IV.2" ... (câu có nhiều ý: "IV.1a", "IV.1b"). Đếm lệnh hỏi theo số câu tự luận.`);
     });
+    lines.push('  - Trong mỗi dạng, đánh mã tăng dần theo mức độ: các mã nhỏ nhất ở Biết, tiếp theo Hiểu, lớn nhất ở Vận dụng, để đề xếp từ dễ đến khó.');
     return lines.join('\n');
 };
 
@@ -271,7 +276,7 @@ export const buildCv7991MatrixPrompt = (
     const { examTypeLabel, semesterNum } = examLabels(data);
     const cols = cv7991MatrixColumnCount(layout);
     return `
-  Hãy tạo **MA TRẬN ĐỀ KIỂM TRA ĐỊNH KÌ** (Full HTML Document) cho môn **${data.subject}**, **Lớp ${data.grade}**,
+  Hãy tạo **MA TRẬN ĐỀ KIỂM TRA** (Full HTML Document) cho môn **${data.subject}**, **Lớp ${data.grade}**,
   theo ĐÚNG mẫu "1. MA TRẬN ĐỀ KIỂM TRA ĐỊNH KÌ" trong Phụ lục kèm Công văn số 7991/BGDĐT-GDTrH ngày 17/12/2024.
 
   **CẤU HÌNH ĐỀ:** ${data.examType} (Kiểm tra ${examTypeLabel} ${semesterNum}) — ${data.duration} phút — tổng ${totalSelectedPeriods} tiết trọng tâm.
@@ -305,7 +310,7 @@ ${buildCv7991MatrixFooterTemplate(layout)}
 \`\`\`
   - "Tổng số câu": số lệnh hỏi của từng cột (Đ–S đếm theo ý), 3 ô Tổng = tổng lệnh hỏi theo mức của cả bài.
   - "Tổng số điểm" ở 3 cột Tổng: tổng điểm các lệnh hỏi ở mức Biết / Hiểu / Vận dụng (tính bằng số lệnh hỏi × điểm mỗi lệnh hỏi đã cho ở trên). Ba số này cộng lại = ${fmtVN(layout.totalPoints)}.
-  - "Tỉ lệ %" ở 3 cột Tổng = điểm mức × 10 (không kèm ký hiệu %). Định hướng CV: Biết ≈ 40, Hiểu ≈ 30, Vận dụng ≈ 30.
+  - "Tỉ lệ %" ở 3 cột Tổng = điểm mức × 10 (không kèm ký hiệu %). Bám sát phân bổ mức độ đã cho ở bảng trên.
   - Ô cuối cột "Tỉ lệ % điểm" ở 3 dòng footer để trống, tô xám (giữ nguyên style).
   - Viết số theo kiểu Việt Nam: dấu phẩy thập phân (3,0; 0,25; 12,5).
 
@@ -336,7 +341,7 @@ export const buildCv7991SpecsPrompt = (
     const comps = getCv7991Competencies(data.subject, footnotes);
     const compList = comps.map(c => `${c.code}: ${c.name}`).join('; ');
     return `
-  Dựa trên **MA TRẬN** (HTML) dưới đây, hãy tạo **BẢN ĐẶC TẢ ĐỀ KIỂM TRA ĐỊNH KÌ** (Full HTML Document)
+  Dựa trên **MA TRẬN** (HTML) dưới đây, hãy tạo **BẢN ĐẶC TẢ ĐỀ KIỂM TRA** (Full HTML Document)
   theo ĐÚNG mẫu "2. BẢN ĐẶC TẢ ĐỀ KIỂM TRA ĐỊNH KÌ" trong Phụ lục kèm Công văn số 7991/BGDĐT-GDTrH ngày 17/12/2024.
 
   **⚠️ NGUYÊN TẮC TỐI THƯỢNG: TUÂN THỦ 100% MA TRẬN ĐẦU VÀO ⚠️**

@@ -1,27 +1,27 @@
 import { Chat, Part, Content, ThinkingLevel } from "@google/genai";
 import { VariantFileData } from "../types";
 import { createGoogleAiClient, getAiProvider, createGeminiConfig, wasTruncated } from "./geminiService";
-import { AiProvider, GEMINI_MODELS, AGENT_PLATFORM_MODELS } from "../constants";
+import { AiProvider, GEMINI_MODELS, AGENT_PLATFORM_MODELS, CHEM_EXAM_RULES } from "../constants";
 import { FIGURE_JSON_MARKDOWN_INSTRUCTIONS } from "./figureEngine";
 import { prepareExamSourceParts } from "./examSourceService";
 
 const VARIANTS_SYSTEM_INSTRUCTION = `
-# ExamGen Pro - SINH ĐỀ THI ĐA MÔN TỰ ĐỘNG
+# SINH ĐỀ HÓA HỌC BIẾN THỂ TỰ ĐỘNG
 
 ## VAI TRÒ
-Bạn là chuyên gia soạn đề thi các môn phổ thông (Toán, Khoa học tự nhiên, Khoa học xã hội, Ngữ văn, Ngoại ngữ…).
-Đề biến thể PHẢI cùng MÔN, cùng KHỐI LỚP, cùng phạm vi kiến thức với đề gốc.
+Bạn là giáo viên Hóa học THPT giàu kinh nghiệm soạn đề.
+Đề biến thể PHẢI cùng KHỐI LỚP, cùng phạm vi kiến thức với đề gốc.
 
 ## NHIỆM VỤ
 Quy trình làm việc chia làm 3 bước độc lập. Tại mỗi bước, bạn sẽ sinh ra MỘT đề thi biến thể và ĐÁP ÁN của đề đó ngay lập tức.
-Mỗi đề biến thể giữ NGUYÊN cấu trúc đề gốc: cùng số phần, cùng số câu từng phần, cùng dạng câu (trắc nghiệm 4 phương án, Đúng – Sai 4 ý a–d, trả lời ngắn, tự luận), cùng thang điểm và mức độ từng câu; chỉ thay số liệu / bối cảnh / cách hỏi.
+Mỗi đề biến thể giữ NGUYÊN cấu trúc đề gốc: cùng số phần, cùng số câu từng phần, cùng dạng câu (trắc nghiệm 4 phương án, Đúng – Sai 4 ý a–d, trả lời ngắn, tự luận), cùng thang điểm và mức độ từng câu; chỉ thay số liệu / chất cùng nhóm / bối cảnh / cách hỏi.
 Đánh số câu "Câu 1", "Câu 2"… như đề gốc.
 
 ---
 
 ## QUY TẮC TRÌNH BÀY (BẮT BUỘC)
 1. **Định dạng Markdown:** Sử dụng Markdown chuẩn.
-2. **Công thức:** BẮT BUỘC dùng LaTeX đặt trong dấu $ (ví dụ: $x^2 + 2x + 1 = 0$).
+2. **Công thức:** viết bằng thẻ <sub>, <sup> ngay trong Markdown (ví dụ: H<sub>2</sub>SO<sub>4</sub>, Fe<sup>3+</sup>).
 3. **Cấu trúc mỗi lần trả lời:**
    - **Phần 1: ĐỀ THI** (Ghi rõ ĐỀ SỐ [X]). Đầy đủ câu hỏi, trắc nghiệm A,B,C,D.
    - **Phần 2: ĐÁP ÁN & HƯỚNG DẪN GIẢI** (Ngay bên dưới đề thi).
@@ -38,10 +38,12 @@ Mỗi đề biến thể giữ NGUYÊN cấu trúc đề gốc: cùng số phầ
 4. **Tuyệt đối không:** Không dùng ASCII art vẽ khung.
 
 5. **Quy tắc cho câu hỏi TRẢ LỜI NGẮN (TLN):**
-   - Đáp án của câu hỏi TLN phải là MỘT SỐ (số nguyên hoặc số thập phân).
+   - Đáp án của câu hỏi TLN phải là MỘT SỐ (số nguyên, số thập phân dấu phẩy hoặc dãy số sắp xếp).
    - Đáp án KHÔNG ĐƯỢC vượt quá 4 ký tự.
    - Nếu kết quả vượt quá 4 ký tự, đề bài phải yêu cầu làm tròn.
    - Thiết kế số liệu sao cho đáp án tự nhiên thỏa mãn điều kiện trên.
+
+${CHEM_EXAM_RULES}
 
 ${FIGURE_JSON_MARKDOWN_INSTRUCTIONS}
 `;

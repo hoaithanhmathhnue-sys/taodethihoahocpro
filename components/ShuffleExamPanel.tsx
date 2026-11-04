@@ -8,6 +8,7 @@ import {
   generateExamVersions,
   missingAnswers,
   parseExamForShuffle,
+  QKind,
   TfLetter,
 } from '../services/examShuffle';
 import { contentToDocxBlob } from '../services/exportUtils';
@@ -43,7 +44,7 @@ const saveBlob = (blob: Blob, name: string) => {
 const parseTfInput = (v: string): string[] =>
   (v.toUpperCase().replace(/D/g, 'Đ').match(/[ĐS]/g) || []).slice(0, 4);
 
-const ShuffleExamPanel: React.FC<{ documents: ShuffleDocument[]; baseName: string; className?: string }> = ({ documents, baseName, className = '' }) => {
+const ShuffleExamPanel: React.FC<{ documents: ShuffleDocument[]; baseName: string; className?: string; levelOf?: (kind: QKind, num: number) => string | undefined }> = ({ documents, baseName, className = '', levelOf }) => {
   const [open, setOpen] = useState(false);
   const [docId, setDocId] = useState(documents[0]?.id || '');
   const [count, setCount] = useState(4);
@@ -93,7 +94,7 @@ const ShuffleExamPanel: React.FC<{ documents: ShuffleDocument[]; baseName: strin
 
   const handleGenerate = () => {
     if (!exam) return;
-    setVersions(generateExamVersions(exam, answers, { count: clampedCount, startCode: startCode || 101, shuffleQuestions, shuffleOptions, shuffleStatements }));
+    setVersions(generateExamVersions(exam, answers, { count: clampedCount, startCode: startCode || 101, shuffleQuestions, shuffleOptions, shuffleStatements, levelOf }));
     setError('');
   };
 

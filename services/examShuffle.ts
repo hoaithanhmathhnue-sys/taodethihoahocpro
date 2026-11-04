@@ -66,6 +66,8 @@ export interface ParsedExam {
   bodyStart: number;
   bodyEnd: number;
   footer: string;
+  /** Vị trí bắt đầu phần đáp án trong đề gốc; -1 nếu không có */
+  answerStart: number;
   sections: ExamSection[];
   questions: ExamQuestion[];
   answers: AnswerBook;
@@ -80,6 +82,8 @@ export interface ShuffleOptions {
   shuffleQuestions: boolean;
   shuffleOptions: boolean;
   shuffleStatements: boolean;
+  /** Mức độ của từng câu: có thì chỉ đổi chỗ các câu cùng mức, giữ trật tự Biết → Hiểu → Vận dụng */
+  levelOf?: (kind: QKind, num: number) => string | undefined;
 }
 
 export interface VersionQuestion {
@@ -118,7 +122,7 @@ const maskSource = (src: string): string => {
   ]) {
     m = m.replace(re, fill);
   }
-  // Bảng trong đề (số liệu, bảng biến thiên) → che, trừ bảng trình bày 4 phương án A–D
+  // Bảng trong đề (số liệu thí nghiệm) → che, trừ bảng trình bày 4 phương án A–D
   for (const t of findTopLevelTables(m).reverse()) {
     const cellsWithLabels = (t.html.match(/<t[dh]\b[^>]*>\s*(?:<[^>]+>\s*)*[A-D]\s*[.)]/gi) || []).length;
     if (cellsWithLabels >= 4) continue;
@@ -523,6 +527,7 @@ export const parseExamForShuffle = (examSource: string, answerSource?: string): 
     bodyStart: withQuestions[0]?.start ?? 0,
     bodyEnd,
     footer: footerWithClose,
+    answerStart,
     sections: withQuestions,
     questions: allQuestions,
     answers,
@@ -831,9 +836,17 @@ const planSection = (sec: ExamSection, opts: ShuffleOptions, rng: () => number):
       while (j + 1 < order.length && order[j + 1].kind === order[i].kind) j++;
       const free: number[] = [];
       for (let k = i; k <= j; k++) if (!order[k].pinned) free.push(k);
-      const perm = derange(free.length, rng);
-      const picked = free.map(k => sec.questions[k]);
-      free.forEach((k, idx) => { order[k] = picked[perm[idx]]; });
+      // Gom theo mức độ (không có thông tin mức thì cả đoạn là một nhóm)
+      const groups = new Map<string, number[]>();
+      free.forEach(k => {
+        const key = opts.levelOf?.(sec.questions[k].kind, sec.questions[k].num) ?? '';
+        groups.set(key, [...(groups.get(key) || []), k]);
+      });
+      groups.forEach(slots => {
+        const perm = derange(slots.length, rng);
+        const picked = slots.map(k => sec.questions[k]);
+        slots.forEach((k, idx) => { order[k] = picked[perm[idx]]; });
+      });
       i = j + 1;
     }
   }

@@ -1,11 +1,11 @@
 import { Type, ThinkingLevel } from "@google/genai";
 import { SimilarExamResult, SimilarExamOptions } from "../types";
 import { callWithFallback, createGeminiConfig, getAiProvider, wasTruncated, UserFacingError } from "./geminiService";
-import { AiProvider } from "../constants";
+import { AiProvider, CHEM_EXAM_RULES } from "../constants";
 import { FIGURE_JSON_MARKDOWN_INSTRUCTIONS } from "./figureEngine";
 import { prepareExamSourceParts } from "./examSourceService";
 
-const SIMILAR_SYSTEM_INSTRUCTION = `Bạn là trợ lý tạo đề thi THPT chuyên nghiệp. Nhiệm vụ của bạn là phân tích đề thi mẫu và sinh ra 1 đề thi tương tự.
+const SIMILAR_SYSTEM_INSTRUCTION = `Bạn là giáo viên Hóa học THPT ra đề chuyên nghiệp. Nhiệm vụ của bạn là phân tích đề Hóa học mẫu và sinh ra 1 đề tương tự, cùng khối lớp, cùng phạm vi kiến thức.
 
 ═══════════════════════════════════════
 CHỨC NĂNG CHÍNH
@@ -15,7 +15,7 @@ Khi nhận được file PDF/Ảnh đề thi mẫu, bạn sẽ:
 
 1. **PHÂN TÍCH ĐỀ MẪU**:
    - Xác định số lượng câu hỏi.
-   - Phân loại dạng toán của từng câu.
+   - Phân loại dạng bài và chủ đề Hóa học của từng câu.
    - Xác định mức độ khó (Nhận biết/Thông hiểu/Vận dụng/Vận dụng cao).
    - Ghi nhận cấu trúc câu hỏi, bối cảnh, thông số.
 
@@ -34,50 +34,15 @@ QUY TẮC SINH ĐỀ
 ✓ Giữ nguyên độ phức tạp tính toán.
 
 ### Nguyên tắc thay đổi:
-✓ Thay số liệu: Đảm bảo đáp án là số đẹp, hợp lý.
-✓ Thay bối cảnh: Dùng tình huống thực tế khác nhưng logic tương đương.
-✓ Thay thông số hình học: Đảm bảo hình vẽ vẫn hợp lệ.
-✓ Thay tên riêng: Người, địa điểm, vật thể.
+✓ Thay số liệu: số mol hợp lí, bảo toàn khối lượng, nguyên tố, electron, điện tích đúng 100%.
+✓ Thay chất: dùng chất cùng nhóm chức hoặc cùng nhóm nguyên tố, phản ứng vẫn đúng thực tế.
+✓ Thay bối cảnh: tình huống thực tiễn, quy trình công nghiệp, thí nghiệm khác nhưng cùng bản chất.
+✓ Thay tên riêng: người, địa điểm, tên sản phẩm.
 
 ═══════════════════════════════════════
-QUY TẮC CÔNG THỨC TOÁN HỌC (BẮT BUỘC)
+CHUẨN MỰC HÓA HỌC
 ═══════════════════════════════════════
-
-⚠️ ĐÂY LÀ QUY TẮC QUAN TRỌNG NHẤT:
-- BẮT BUỘC bọc TẤT CẢ công thức toán trong $...$ (inline) hoặc $$...$$ (display/riêng dòng).
-- KHÔNG BAO GIỜ viết công thức toán dưới dạng text thuần (plain text).
-
-### Ví dụ ĐÚNG ✅:
-- "Cho hàm số $f(x) = 3x^2 + 2x$, tìm $f'(x)$"
-- "Tính $\\int_0^1 (2x+1) dx$"
-- "Phương trình $x^2 - 5x + 6 = 0$ có hai nghiệm $x_1 = 2$, $x_2 = 3$"
-- "Tập nghiệm của bất phương trình $\\frac{x-1}{x+2} \\geq 0$ là $(-\\infty; -2) \\cup [1; +\\infty)$"
-- Display math riêng dòng: $$V = \\pi \\int_a^b [f(x)]^2 dx$$
-
-### Ví dụ SAI ❌:
-- "Cho hàm số f(x) = 3x^2 + 2x" (thiếu $...$)
-- "Tính tích phân từ 0 đến 1 của (2x+1)dx" (không dùng LaTeX)
-- "extsinx + Cx3" (công thức bị vỡ)
-
-### Các lệnh LaTeX phổ biến:
-- Phân số: $\\frac{a}{b}$
-- Căn bậc hai: $\\sqrt{x}$, $\\sqrt[3]{x}$
-- Tích phân: $\\int_a^b f(x)dx$
-- Giới hạn: $\\lim_{x \\to 0} f(x)$
-- Tổng: $\\sum_{i=1}^{n} a_i$
-- Lũy thừa: $x^2$, chỉ số: $a_n$
-- Lượng giác: $\\sin x$, $\\cos x$, $\\tan x$, $\\cot x$
-- Logarit: $\\log_a x$, $\\ln x$
-- Vector: $\\vec{a}$, tập hợp: $\\mathbb{R}$
-- Dấu: $\\leq$, $\\geq$, $\\neq$, $\\infty$, $\\pm$, $\\cdot$
-
-### ⛔ LỖI NGHIÊNG TRỌNG CẦN TRÁNH:
-- KHÔNG ĐƯỢC dùng \\text{sin}, \\text{cos}, \\text{tan}, \\text{cot}, \\text{log}, \\text{ln}
-  → PHẢI dùng \\sin, \\cos, \\tan, \\cot, \\log, \\ln (lệnh LaTeX chuẩn)
-- KHÔNG ĐƯỢC viết: $\\text{sin}x$ ❌ → PHẢI viết: $\\sin x$ ✅
-- KHÔNG ĐƯỢC viết: $\\text{cos}x$ ❌ → PHẢI viết: $\\cos x$ ✅
-- KHÔNG ĐƯỢC viết: $\\text{log}x$ ❌ → PHẢI viết: $\\log x$ ✅
-- KHÔNG ĐƯỢC dùng \\text{} để bọc tên hàm toán học. \\text{} chỉ dùng cho chữ tiếng Việt bình thường.
+${CHEM_EXAM_RULES}
 
 ═══════════════════════════════════════
 ĐỊNH DẠNG XUẤT RA
@@ -118,7 +83,7 @@ Câu ...: Đáp số là ...
 | **Câu 1** | **d)** | **S** | Giải thích / lời giải chi tiết cho ý d)... |
 
 ## Quy tắc Markdown & Hình vẽ trực quan:
-- Công thức: Inline: $x^2 + y^2 = r^2$ | Display: $$ \\\\int_{a}^{b} f(x)dx $$
+- Công thức hóa học viết bằng thẻ <sub>, <sup> ngay trong Markdown, ví dụ H<sub>2</sub>SO<sub>4</sub>, Fe<sup>3+</sup>.
 ${FIGURE_JSON_MARKDOWN_INSTRUCTIONS}
 `;
 
@@ -141,12 +106,10 @@ const buildCustomInstructions = (options?: SimilarExamOptions): string => {
   if (!options) return customInstructions;
   if (options.diagramMode === 'detailed') {
     customInstructions += `\n\n### YÊU CẦU NÂNG CAO VỀ HÌNH VẼ (High Detail):
-- BẮT BUỘC vẽ hình trực quan bằng khối \`\`\`figure-json ... \`\`\` cho mọi câu có Bảng biến thiên (type: "bbt"), Đồ thị hàm số / Diện tích hình phẳng (type: "graph"), Hình không gian 3D (type: "geo3d"), và Hình phẳng 2D (type: "geo2d").
-- Với hình không gian 3D và hình phẳng 2D: Khai báo đầy đủ các điểm phụ (extra) và ký hiệu góc vuông (marks).
-- Với đồ thị: Hiển thị đầy đủ tiệm cận, điểm cực trị và miền tô tích phân nếu có.`;
+- Đề mẫu có hình nào thì đề mới có hình tương ứng bằng khối \`\`\`figure-json ... \`\`\`: dụng cụ, bộ thí nghiệm, phổ IR/MS, công thức cấu tạo, mạch vòng, peptide, polymer; ghi đủ chú thích và số liệu.`;
   } else {
     customInstructions += `\n\n### YÊU CẦU VỀ HÌNH VẼ (Standard):
-- Sử dụng khối \`\`\`figure-json ... \`\`\` để vẽ tự động Bảng biến thiên (bbt), Đồ thị hàm số (graph), Hình không gian 3D (geo3d) và Hình phẳng 2D (geo2d).`;
+- Câu cần hình thì dùng khối \`\`\`figure-json ... \`\`\` để app tự vẽ.`;
   }
   if (options.solutionMode === 'concise') {
     customInstructions += `\n\n### YÊU CẦU VỀ LỜI GIẢI (Concise Mode):

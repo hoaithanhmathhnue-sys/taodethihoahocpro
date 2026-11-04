@@ -26,9 +26,10 @@ const MATH_FORMAT_KEY = 'word_math_format';
 
 export const getWordMathFormat = (): WordMathFormat => {
   try {
-    return localStorage.getItem(MATH_FORMAT_KEY) === 'equation' ? 'equation' : 'latex';
+    // Mặc định Equation: mở Word không còn mã LaTeX thô
+    return localStorage.getItem(MATH_FORMAT_KEY) === 'latex' ? 'latex' : 'equation';
   } catch {
-    return 'latex';
+    return 'equation';
   }
 };
 

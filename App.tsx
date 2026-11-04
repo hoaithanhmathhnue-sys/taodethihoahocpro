@@ -4,7 +4,8 @@ import { AppStep, AppMode, InputData, GenerationState, Lesson, Chapter, Question
 import StepIndicator from './components/StepIndicator';
 import Button from './components/Button';
 import MarkdownView from './components/MarkdownView';
-import BbtQuickGenerator from './components/BbtQuickGenerator';
+import ChemFigurePanel from './components/ChemFigurePanel';
+import ExamPackagePanel from './components/ExamPackagePanel';
 import SimilarExamPage from './components/SimilarExamPage';
 import VariantsExamPage from './components/VariantsExamPage';
 
@@ -12,24 +13,56 @@ import { generateStep1Matrix, generateStep2Specs, generateStep3ExamChecked, extr
 import { parseDocxWithMath, extractQuestionsLocally, extractDocxTablesAndHtml, splitMatrixAndSpecsHtml, isLegacyBinaryDoc } from './services/docxMathParser';
 import { resolveContracts, ResolvedContracts, summarizeContract, sameSubject, fmtNum, QTYPES } from './services/matrixContract';
 import type { ExamIssue } from './services/examValidator';
-import { renderMarkdownPreservingMath } from './services/mathExportUtils';
-import { prepareMathForWord } from './services/wordEquation';
 import MathFormatSelect from './components/MathFormatSelect';
 import ShuffleExamPanel from './components/ShuffleExamPanel';
-import { extractFiguresToPlaceholders, restoreFiguresAsPngForWord } from './services/figureEngine';
-// @ts-ignore
-import { asBlob } from 'html-docx-js-typescript';
-import MarkdownIt from 'markdown-it';
+import { exportToDoc } from './services/exportUtils';
+import { buildLevelOf } from './services/examPackage';
+import { DEFAULT_HEADER_PROFILE, ExamHeaderProfile, getExamHeaderProfile, saveExamHeaderProfile } from './services/examLayout';
+import { APP_INFO, CHEMISTRY_GRADES, CHEMISTRY_SUBJECT, TEXTBOOK_NAME } from './data/appInfo';
+import { getAllChemistryChapters, getChemistryChapters } from './data/chemistryCurriculum';
+import { actualLevelPercent, buildQuestionConfig, DEFAULT_LEVEL_RATIO, examTypeForPreset, EXAM_PRESETS, ExamPreset, getPreset, LevelRatio, RATIO_SHORTCUTS } from './data/examPresets';
 import { GEMINI_MODELS, AGENT_PLATFORM_MODELS, DEFAULT_GEMINI_MODEL, DEFAULT_AGENT_PLATFORM_MODEL, AiProvider } from './constants';
-import { MATRIX_TEMPLATES } from './services/matrixTemplates';
 import { validateAccount, Account } from './data/accounts';
-import { ArrowRight, ArrowLeft, RotateCcw, FileText, Download, AlertCircle, Upload, Clock, Check, ChevronDown, ChevronRight, Filter, FileUp, Settings, Key, ExternalLink, Sun, Moon, X, Paperclip, Trash2, BookOpen, LogIn, Lock, User, Gift, Phone, Shield, Copy, Shuffle, Sparkles, Layers, Zap, History, Save, Eye } from 'lucide-react';
+import { ArrowRight, ArrowLeft, RotateCcw, FileText, Download, AlertCircle, Upload, Clock, Check, ChevronDown, ChevronRight, Filter, FileUp, Settings, Key, ExternalLink, Sun, Moon, X, Paperclip, Trash2, BookOpen, LogIn, Lock, User, Gift, Phone, Shield, Copy, Shuffle, Sparkles, Layers, Zap, History, Save, Eye, FlaskConical } from 'lucide-react';
 
-const mdParser = new MarkdownIt({
-  html: true,
-  breaks: true, // Chuyển đổi ký tự xuống dòng thành thẻ <br>
-  linkify: true
-});
+const DEFAULT_PRESET_ID = 'dinh-ky';
+const DEFAULT_SEMESTER_EXAM = 'Giữa kỳ 1';
+const DEFAULT_GRADE = '10';
+
+/** Dữ liệu ban đầu: môn Hóa học, cấu trúc đề định kỳ, chương trình Kết nối tri thức. */
+const buildInitialInput = (): InputData => {
+  const preset = getPreset(DEFAULT_PRESET_ID)!;
+  return {
+    subject: CHEMISTRY_SUBJECT,
+    grade: DEFAULT_GRADE,
+    duration: preset.duration,
+    examType: DEFAULT_SEMESTER_EXAM,
+    topics: '',
+    additionalNotes: '',
+    chapters: getChemistryChapters(DEFAULT_GRADE),
+    questionConfig: buildQuestionConfig(preset, DEFAULT_LEVEL_RATIO),
+  };
+};
+
+/** Lọc bài theo kỳ kiểm tra dựa vào tuần học. */
+const lessonIdsForExam = (type: string, chapters: Chapter[]): Set<string> => {
+  const selection = new Set<string>();
+  chapters.forEach(chap => {
+    chap.lessons.forEach(lesson => {
+      const end = lesson.weekEnd || 99; // Default to late if unknown
+      const start = lesson.weekStart || 0;
+      let shouldSelect = false;
+      if (type.includes('Giữa kỳ 1')) shouldSelect = end <= 10;
+      else if (type.includes('Cuối kỳ 1')) shouldSelect = end <= 18;
+      else if (type.includes('Giữa kỳ 2')) shouldSelect = start >= 19 && end <= 27;
+      else if (type.includes('Cuối kỳ 2')) shouldSelect = start >= 19; // Chỉ HK2 (tuần 19+)
+      else if (/tốt\s*nghiệp/i.test(type)) shouldSelect = true; // Đề ôn thi: cả 3 khối
+      // Kiểm tra thường xuyên: giáo viên tự chọn bài vừa học
+      if (shouldSelect) selection.add(lesson.id);
+    });
+  });
+  return selection;
+};
 
 const App: React.FC = () => {
   const [currentStep, setCurrentStep] = useState<AppStep>(AppStep.INPUT);
@@ -40,23 +73,15 @@ const App: React.FC = () => {
   const [appMode, setAppMode] = useState<AppMode>('home');
 
   // -- Data State --
-  const [inputData, setInputData] = useState<InputData>({
-    subject: '',
-    grade: '',
-    duration: 45,
-    examType: 'Giữa kỳ 1',
-    topics: '',
-    additionalNotes: '',
-    chapters: [],
-    questionConfig: {
-      type1: { biet: 8, hieu: 4, van_dung: 0, van_dung_cao: 0 },
-      type2: { biet: 1, hieu: 1, van_dung: 0, van_dung_cao: 0 },
-      type2QuestionCount: 2,
-      dungSaiLevelConfigs: [{ ...DEFAULT_DUNG_SAI_LEVELS }, { ...DEFAULT_DUNG_SAI_LEVELS }],
-      type3: { biet: 1, hieu: 1, van_dung: 2, van_dung_cao: 0 },
-      essay: { biet: 0, hieu: 0, van_dung: 0, van_dung_cao: 0 },
-    }
-  });
+  const [inputData, setInputData] = useState<InputData>(buildInitialInput);
+
+  // -- Thiết lập đề 1 chạm --
+  const [presetId, setPresetId] = useState<string>(DEFAULT_PRESET_ID);
+  const [semesterExam, setSemesterExam] = useState<string>(DEFAULT_SEMESTER_EXAM);
+  const [levelRatio, setLevelRatio] = useState<LevelRatio>(DEFAULT_LEVEL_RATIO);
+  const [customPoints, setCustomPoints] = useState(() => ({ ...getPreset('thuong-xuyen-to-hop')!.points }));
+  const [headerProfile, setHeaderProfile] = useState<ExamHeaderProfile>(getExamHeaderProfile);
+  const [verifyAnswers, setVerifyAnswers] = useState(true);
 
   // -- Dark Mode State --
   const [darkMode, setDarkMode] = useState(() => {
@@ -105,8 +130,8 @@ const App: React.FC = () => {
   }, []);
 
   // -- UI State --
-  const [selectedLessonIds, setSelectedLessonIds] = useState<Set<string>>(new Set());
-  const [expandedChapterIds, setExpandedChapterIds] = useState<Set<string>>(new Set());
+  const [selectedLessonIds, setSelectedLessonIds] = useState<Set<string>>(() => lessonIdsForExam(DEFAULT_SEMESTER_EXAM, getChemistryChapters(DEFAULT_GRADE)));
+  const [expandedChapterIds, setExpandedChapterIds] = useState<Set<string>>(() => new Set(getChemistryChapters(DEFAULT_GRADE).map(c => c.id)));
 
   const [genState, setGenState] = useState<GenerationState>({
     matrix: '',
@@ -121,13 +146,12 @@ const App: React.FC = () => {
   const [analyzeNow, setAnalyzeNow] = useState(() => Date.now());
   const analyzeAbortRef = useRef<AbortController | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
-  const [isCustomSubject, setIsCustomSubject] = useState(false);
-  const [matrixTemplate, setMatrixTemplate] = useState<MatrixTemplate>('template1');
+  const matrixTemplate: MatrixTemplate = 'template1';
   const [isUploadedMatrix, setIsUploadedMatrix] = useState<boolean>(false);
   // Hợp đồng số liệu đọc từ Ma trận / Đặc tả tải lên (hiển thị cho người dùng kiểm tra)
   const [contracts, setContracts] = useState<ResolvedContracts | null>(null);
   // Kết quả kiểm tra đề sau khi sinh
-  const [examCheck, setExamCheck] = useState<{ issues: ExamIssue[]; repaired: boolean; usedContract: boolean } | null>(null);
+  const [examCheck, setExamCheck] = useState<{ issues: ExamIssue[]; repaired: boolean; usedContract: boolean; verifiedCount: number | null; roundingAdded: number[] } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const matrixUploadRef = useRef<HTMLInputElement>(null); // Ref for Step 2 upload
   const matrixDirectUploadRef = useRef<HTMLInputElement>(null); // Ref for Step 1 direct upload
@@ -265,23 +289,51 @@ const App: React.FC = () => {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
+    setInputData(prev => ({ ...prev, [name]: name === 'duration' ? Number(value) || 0 : value }));
+  };
 
-    if (name === 'examType') {
-      let newDuration = 45;
-      if (value.includes('15 phút')) newDuration = 15;
-      else if (value.includes('45 phút')) newDuration = 45;
-      else if (value.includes('Giữa') || value.includes('Cuối')) newDuration = 90; // Standard for semesters
+  /** Áp lại toàn bộ thiết lập: số câu, thang điểm, thời gian, chương trình, bài được chọn. */
+  const applyExamSetup = (next: { presetId?: string; grade?: string; semesterExam?: string; ratio?: LevelRatio; points?: ExamPreset['points'] }) => {
+    const preset = getPreset(next.presetId ?? presetId)!;
+    const semester = next.semesterExam ?? semesterExam;
+    const ratio = next.ratio ?? levelRatio;
+    const grade = preset.allGrades ? '12' : (next.grade ?? inputData.grade ?? DEFAULT_GRADE);
+    const points = preset.customPoints ? (next.points ?? customPoints) : preset.points;
+    const examType = examTypeForPreset(preset, semester);
+    const keepUploadedPlan = !!uploadedFileName && !preset.allGrades && grade === inputData.grade;
+    const chapters = keepUploadedPlan ? inputData.chapters : preset.allGrades ? getAllChemistryChapters() : getChemistryChapters(grade);
+    setPresetId(preset.id);
+    setSemesterExam(semester);
+    setLevelRatio(ratio);
+    setInputData(prev => ({
+      ...prev,
+      subject: CHEMISTRY_SUBJECT,
+      grade,
+      examType,
+      duration: preset.duration,
+      chapters,
+      questionConfig: buildQuestionConfig(preset, ratio, points),
+    }));
+    if (!keepUploadedPlan) setUploadedFileName(null);
+    setExpandedChapterIds(new Set(preset.allGrades ? [] : chapters.map(c => c.id)));
+    setSelectedLessonIds(lessonIdsForExam(examType, chapters));
+  };
 
-      setInputData(prev => ({ ...prev, [name]: value, duration: newDuration }));
+  const updateHeaderProfile = (patch: Partial<ExamHeaderProfile>) => {
+    const next = { ...headerProfile, ...patch };
+    setHeaderProfile(next);
+    saveExamHeaderProfile(next);
+  };
 
-      // Auto-filter topics when exam type changes
-      if (inputData.chapters.length > 0) {
-        applySmartFilter(value, inputData.chapters);
-      }
-
-    } else {
-      setInputData(prev => ({ ...prev, [name]: value }));
-    }
+  const updateLessonPeriods = (chapterId: string, lessonId: string, periods: number) => {
+    setInputData(prev => ({
+      ...prev,
+      chapters: prev.chapters.map(chap => {
+        if (chap.id !== chapterId) return chap;
+        const lessons = chap.lessons.map(l => (l.id === lessonId ? { ...l, periods } : l));
+        return { ...chap, lessons, totalPeriods: lessons.reduce((sum, l) => sum + (l.periods || 0), 0) };
+      }),
+    }));
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -297,7 +349,7 @@ const App: React.FC = () => {
     analyzeAbortRef.current = abortController;
 
     try {
-      const extracted = await extractInfoFromDocument(file, inputData.subject, inputData.grade, {
+      const extracted = await extractInfoFromDocument(file, CHEMISTRY_SUBJECT, inputData.grade, {
         signal: abortController.signal,
         onProgress: p => setAnalyzeProgress({ startedAt, ...p }),
       });
@@ -307,18 +359,13 @@ const App: React.FC = () => {
       }
 
       // Fix 3: Validation — cảnh báo nếu AI trả về môn khác với môn đã chọn
-      if (inputData.subject && extracted.subject && extracted.subject !== inputData.subject) {
-        const aiSubject = extracted.subject;
-        const userSubject = inputData.subject;
-        // Kiểm tra không phải chỉ khác cách viết (ví dụ: "Công nghệ" vs "Công Nghệ")
-        if (aiSubject.toLowerCase().trim() !== userSubject.toLowerCase().trim()) {
-          alert(`⚠️ CẢNH BÁO: Bạn đã chọn môn "${userSubject}" nhưng AI phát hiện file này có nội dung môn "${aiSubject}".\n\nVui lòng kiểm tra lại file PPCT đã upload có đúng môn "${userSubject}" không.`);
-        }
+      if (extracted.subject && !sameSubject(CHEMISTRY_SUBJECT, extracted.subject)) {
+        alert(`⚠️ CẢNH BÁO: App chỉ tạo đề môn Hóa học nhưng AI phát hiện file này có nội dung môn "${extracted.subject}".\n\nVui lòng kiểm tra lại file PPCT đã tải lên.`);
       }
 
       setInputData(prev => ({
         ...prev,
-        subject: prev.subject || extracted.subject || '',
+        subject: CHEMISTRY_SUBJECT,
         grade: prev.grade || extracted.grade || '',
         topics: extracted.topics || prev.topics, // Fallback
         chapters: extracted.chapters || [],
@@ -355,9 +402,6 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, [isAnalyzingFile]);
 
-    // Tên môn có trong ô chọn môn (ngoài danh sách → chuyển sang "Môn khác")
-  const SUBJECT_OPTIONS = ['Toán học', 'Ngữ văn', 'Tiếng Anh', 'Vật lí', 'Hóa học', 'Sinh học', 'Lịch sử', 'Địa lí', 'Tin học', 'Công nghệ', 'Giáo dục công dân'];
-
   /**
    * Đồng bộ thông tin từ Ma trận / Đặc tả tải lên bằng HỢP ĐỒNG SỐ LIỆU (đọc mã câu theo cột):
    *  - Số câu từng dạng × mức độ, cấp độ từng ý Đúng – Sai, điểm → lấy đúng theo file.
@@ -372,26 +416,24 @@ const App: React.FC = () => {
     const meta = { ...(resolved.specs?.meta || {}), ...(resolved.matrix?.meta || {}) };
     console.log('[MatrixUpload] Hợp đồng số liệu:', primary ? summarizeContract(primary) : '(không đọc được)', resolved);
 
-    // Xung đột Môn / Lớp giữa file và lựa chọn trên màn hình
+    // App chỉ dành cho môn Hóa học: file môn khác → báo để giáo viên kiểm tra
     const current = inputData;
-    const subjectConflict = !!(current.subject && meta.subject && !sameSubject(current.subject, meta.subject));
+    if (meta.subject && !sameSubject(CHEMISTRY_SUBJECT, meta.subject)) {
+      alert(`⚠️ File tải lên ghi môn ${meta.subject}, trong khi app chỉ tạo đề môn Hóa học. Vui lòng kiểm tra lại file.`);
+    }
     const gradeConflict = !!(current.grade && meta.grade && current.grade !== meta.grade);
     let useFile = true;
-    if (subjectConflict || gradeConflict) {
-      const fileDesc = `${meta.subject ? `môn ${meta.subject}` : ''}${meta.grade ? ` lớp ${meta.grade}` : ''}`.trim();
-      const screenDesc = `môn ${current.subject || '(chưa chọn)'} lớp ${current.grade || '(chưa chọn)'}`;
+    if (gradeConflict) {
       useFile = window.confirm(
-        `⚠️ File tải lên ghi ${fileDesc}, nhưng màn hình đang chọn ${screenDesc}.\n\n` +
+        `⚠️ File tải lên ghi lớp ${meta.grade}, nhưng màn hình đang chọn lớp ${current.grade}.\n\n` +
         `• Bấm OK để dùng theo FILE (khuyên dùng).\n• Bấm Cancel để giữ lựa chọn trên màn hình.`
       );
     }
-    const nextSubject = (useFile ? meta.subject : undefined) || current.subject || meta.subject || '';
     const nextGrade = (useFile ? meta.grade : undefined) || current.grade || meta.grade || '';
-    setIsCustomSubject(!!nextSubject && !SUBJECT_OPTIONS.includes(nextSubject));
 
     setInputData(prev => ({
       ...prev,
-      subject: nextSubject,
+      subject: CHEMISTRY_SUBJECT,
       grade: nextGrade,
       examType: meta.examType || prev.examType,
       duration: meta.duration || prev.duration,
@@ -409,11 +451,11 @@ const App: React.FC = () => {
   };
 
   const requireSubjectAndGrade = (data: InputData): boolean => {
-    if (!data.subject || !data.grade) {
+    if (!data.grade) {
       setGenState(prev => ({
         ...prev,
         isLoading: false,
-        error: 'Chưa xác định được Môn học / Khối lớp từ file. Vui lòng chọn Môn và Lớp ở thanh thông tin phía trên bảng rồi bấm lại.',
+        error: 'Chưa xác định được khối lớp từ file. Vui lòng chọn Lớp ở thanh thông tin phía trên bảng rồi bấm lại.',
       }));
       return false;
     }
@@ -563,24 +605,7 @@ const App: React.FC = () => {
   // -- Topic Selection Logic --
 
   const applySmartFilter = (type: string, chapters: Chapter[]) => {
-    const newSelection = new Set<string>();
-
-    chapters.forEach(chap => {
-      chap.lessons.forEach(lesson => {
-        const end = lesson.weekEnd || 99; // Default to late if unknown
-        const start = lesson.weekStart || 0;
-        let shouldSelect = false;
-
-        if (type.includes('Giữa kỳ 1')) shouldSelect = end <= 10;
-        else if (type.includes('Cuối kỳ 1')) shouldSelect = end <= 18;
-        else if (type.includes('Giữa kỳ 2')) shouldSelect = start >= 19 && end <= 27;
-        else if (type.includes('Cuối kỳ 2')) shouldSelect = start >= 19; // Chỉ HK2 (tuần 19+)
-        else shouldSelect = true; // 15 mins etc (User manual select)
-
-        if (shouldSelect) newSelection.add(lesson.id);
-      });
-    });
-    setSelectedLessonIds(newSelection);
+    setSelectedLessonIds(lessonIdsForExam(type, chapters));
   };
 
   const toggleChapter = (chapId: string, select: boolean) => {
@@ -638,7 +663,7 @@ const App: React.FC = () => {
       setIsUploadedMatrix(false);
       setContracts(null);
       setExamCheck(null);
-      const matrix = await generateStep1Matrix(inputData, selectedLessonIds, matrixTemplate);
+      const matrix = await generateStep1Matrix(inputData, selectedLessonIds);
       // Tôn trọng cấu hình: nếu người dùng đã đặt tự luận = 0, không auto-set lên
       const userConfigTotalEssay = inputData.questionConfig.essay.biet + inputData.questionConfig.essay.hieu + inputData.questionConfig.essay.van_dung + inputData.questionConfig.essay.van_dung_cao;
       if (userConfigTotalEssay === 0) {
@@ -680,7 +705,6 @@ const App: React.FC = () => {
         genState.matrix,
         effectiveData,
         selectedLessonIds,
-        matrixTemplate,
         isUploadedMatrix
       );
       // Đối chiếu đặc tả vừa sinh với ma trận → cảnh báo nếu lệch số câu
@@ -728,9 +752,10 @@ const App: React.FC = () => {
         questionsToUse.length > 0 ? questionsToUse : undefined,
         referenceMode,
         genState.matrix || undefined,
-        isUploadedMatrix
+        isUploadedMatrix,
+        verifyAnswers
       );
-      setExamCheck({ issues: result.issues, repaired: result.repaired, usedContract: result.usedContract });
+      setExamCheck({ issues: result.issues, repaired: result.repaired, usedContract: result.usedContract, verifiedCount: result.verifiedCount, roundingAdded: result.roundingAdded });
       setGenState(prev => ({ ...prev, exam: result.html, isLoading: false }));
       setCurrentStep(AppStep.EXAM);
       setCompletedSteps(Math.max(completedSteps, 3));
@@ -787,7 +812,6 @@ const App: React.FC = () => {
     setShowHistoryModal(false);
     setAppMode('cv7991');
     setInputData(item.inputData);
-    setMatrixTemplate(item.matrixTemplate || 'template1');
     setSelectedLessonIds(new Set(item.selectedLessonIds || []));
     setIsCurrentExamSaved(false);
     setCurrentStep(AppStep.EXAM);
@@ -814,10 +838,11 @@ const App: React.FC = () => {
         extractedQuestions.length > 0 ? extractedQuestions : undefined,
         referenceMode,
         item.matrix || undefined,
-        !!item.isUploadedMatrix
+        !!item.isUploadedMatrix,
+        verifyAnswers
       );
       const newExam = result.html;
-      setExamCheck({ issues: result.issues, repaired: result.repaired, usedContract: result.usedContract });
+      setExamCheck({ issues: result.issues, repaired: result.repaired, usedContract: result.usedContract, verifiedCount: result.verifiedCount, roundingAdded: result.roundingAdded });
 
       setGenState({
         matrix: item.matrix,
@@ -841,7 +866,6 @@ const App: React.FC = () => {
     setExamCheck(null);
     setAppMode('cv7991');
     setInputData(item.inputData);
-    setMatrixTemplate(item.matrixTemplate || 'template1');
     setSelectedLessonIds(new Set(item.selectedLessonIds || []));
     setGenState({
       matrix: item.matrix,
@@ -1008,119 +1032,24 @@ const App: React.FC = () => {
     setExtractedQuestions([]);
   };
 
-  const handleDownloadWord = async (content: string, fileName: string) => {
-    let sourceHTML = '';
+  const handleDownloadWord = (content: string, fileName: string) =>
+    exportToDoc(content, fileName, currentStep === AppStep.EXAM ? { examLayout: true } : { landscape: true });
+
+  /** Nạp đề thi tốt nghiệp mẫu đi kèm app vào tài liệu tham khảo (mặc định chỉ tham khảo dạng câu, không chép). */
+  const handleLoadSampleExams = async () => {
+    setIsParsingReference(true);
     try {
-      const { text: contentWithoutFigures, figures } = extractFiguresToPlaceholders(content);
-      const cleanedContent = contentWithoutFigures.replace(/^```html\s*/i, '').replace(/\s*```$/i, '').trim();
-
-      // Nếu đã là Full HTML document (có thẻ html/body hoặc doctype)
-      if (cleanedContent.includes('<!DOCTYPE html>') || (cleanedContent.includes('<html') && cleanedContent.includes('<body'))) {
-        sourceHTML = cleanedContent.replace(
-          /<\/style>/i,
-          `
-            table { page-break-inside: auto; border-collapse: collapse; width: 100%; margin-bottom: 1rem; }
-            tr { page-break-inside: avoid; page-break-after: auto; }
-            td, th { border: 1px solid black; padding: 5px; vertical-align: middle; }
-            th { background-color: #f2f2f2; font-weight: bold; text-align: center; }
-            .answer-table { width: 100%; border-collapse: collapse; margin: 8pt 0 12pt 0; }
-            .answer-table th, .answer-table td { border: 1px solid #000; padding: 5pt 6pt; vertical-align: middle; }
-            .answer-table th { background-color: #f2f2f2; font-weight: bold; text-align: center; }
-            .answer-table td.center { text-align: center; }
-            .answer-table td.left { text-align: left; }
-            p { margin-top: 4pt; margin-bottom: 4pt; line-height: 1.4; page-break-inside: avoid; }
-            .options { margin-left: 15pt; page-break-inside: avoid; }
-            .option-item { margin-bottom: 3pt; }
-            .question-number { font-weight: bold; }
-            h1, h2, h3, h4 { page-break-after: avoid; }
-            div { page-break-inside: avoid; }
-
-            /* CSS BẢNG BIẾN THIÊN CHUẨN SGK CHO WORD */
-            .bbt-table { border-collapse: collapse; margin: 12pt auto; border: 1px solid #000; min-width: 420px; }
-            .bbt-table td { padding: 4pt 8pt; text-align: center; vertical-align: middle; border: none; }
-            .bbt-table .label-col { font-weight: bold; font-style: italic; border-right: 1px solid #000; width: 40pt; }
-            .bbt-table .row-border { border-bottom: 1px solid #000; }
-          </style>`
-        );
-      } else {
-        // Nếu là MARKDOWN: render sang HTML, tạm cất công thức để markdown-it không làm hỏng LaTeX
-        const renderedBody = renderMarkdownPreservingMath(mdParser, cleanedContent);
-        
-        sourceHTML = `
-          <!DOCTYPE html>
-          <html lang="vi">
-          <head>
-            <meta charset="utf-8">
-            <title>${fileName}</title>
-            <style>
-              body { font-family: 'Times New Roman', serif; font-size: 13pt; line-height: 1.5; color: #000; }
-              h1, h2, h3, h4 { font-weight: bold; margin-top: 10pt; margin-bottom: 6pt; page-break-after: avoid; }
-              p { margin-top: 4pt; margin-bottom: 4pt; text-align: justify; page-break-inside: avoid; }
-              ul, ol { margin-top: 2pt; margin-bottom: 6pt; padding-left: 20pt; }
-              li { margin-bottom: 3pt; }
-              table { border-collapse: collapse; width: 100%; margin: 8pt 0; page-break-inside: auto; }
-              tr { page-break-inside: avoid; page-break-after: auto; }
-              td, th { border: 1px solid black; padding: 4pt 6pt; vertical-align: middle; }
-              th { background-color: #f2f2f2; font-weight: bold; text-align: center; }
-              .answer-table { width: 100%; border-collapse: collapse; margin: 8pt 0 12pt 0; }
-              .answer-table th, .answer-table td { border: 1px solid #000; padding: 5pt 6pt; vertical-align: middle; }
-              .answer-table th { background-color: #f2f2f2; font-weight: bold; text-align: center; }
-              .answer-table td.center { text-align: center; }
-              .answer-table td.left { text-align: left; }
-              strong { font-weight: bold; }
-              .options { margin-left: 15pt; page-break-inside: avoid; }
-              .option-item { margin-bottom: 3pt; }
-              .question-number { font-weight: bold; }
-
-              /* CSS BẢNG BIẾN THIÊN CHUẨN SGK CHO WORD */
-              .bbt-table { border-collapse: collapse; margin: 12pt auto; border: 1px solid #000; min-width: 420px; }
-              .bbt-table td { padding: 4pt 8pt; text-align: center; vertical-align: middle; border: none; }
-              .bbt-table .label-col { font-weight: bold; font-style: italic; border-right: 1px solid #000; width: 40pt; }
-              .bbt-table .row-border { border-bottom: 1px solid #000; }
-            </style>
-          </head>
-          <body>
-            ${renderedBody}
-          </body>
-          </html>
-        `;
-      }
-
-      // Đảm bảo mọi bảng (trừ bảng biến thiên .bbt-table) đều có border="1" để hiển thị rõ khung bảng trong Word
-      sourceHTML = sourceHTML.replace(/<table(?![^>]*bbt-table)(?![^>]*border=)/gi, '<table border="1" cellspacing="0" cellpadding="5"');
-
-      // Chuẩn hoá công thức: LaTeX $...$ hoặc Equation của Word (theo lựa chọn của giáo viên)
-      sourceHTML = prepareMathForWord(sourceHTML);
-
-      // Chuyển các hình vẽ (BBT, đồ thị, hình 3D) thành ảnh PNG 300 DPI nhúng vào Word
-      sourceHTML = await restoreFiguresAsPngForWord(sourceHTML, figures, 300);
-
-      const blob = await asBlob(sourceHTML, {
-        orientation: 'portrait',
-        margins: { top: 720, right: 720, bottom: 720, left: 720 }
-      });
-
-      const url = URL.createObjectURL(blob as Blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${fileName}.docx`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Lỗi xuất file Word (.docx), fallback sang .doc:', error);
-      // Fallback: xuất .doc nếu .docx thất bại
-      const fallbackHtml = sourceHTML || prepareMathForWord((content.includes('<!DOCTYPE html>') ? content : `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${renderMarkdownPreservingMath(mdParser, content)}</body></html>`));
-      const blob = new Blob(['\ufeff', fallbackHtml], { type: 'application/msword' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${fileName}.doc`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      const samples = ['De_TN_THPT_2026_ma_0323.docx', 'De_TN_THPT_2026_lan_2_ma_0344.docx'];
+      const files = await Promise.all(samples.map(async name => {
+        const res = await fetch(`/samples/${name}`);
+        if (!res.ok) throw new Error(`không tải được ${name}`);
+        return new File([await res.blob()], name, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      }));
+      setReferenceMode('adapt');
+      await processReferenceFiles(files);
+    } catch (err: any) {
+      setGenState(prev => ({ ...prev, error: `Lỗi nạp đề mẫu: ${err.message}` }));
+      setIsParsingReference(false);
     }
   };
 
@@ -1210,64 +1139,19 @@ const App: React.FC = () => {
                 <p className="text-sm text-blue-600">Tải lên file Ma trận (HTML, Word, PDF) để bỏ qua các bước cấu hình và sinh ngay Bảng đặc tả.</p>
               </div>
               
-              {/* 🔴 KHAI BÁO MÔN & LỚP TRƯỚC KHI UPLOAD (Tránh nhầm lẫn) */}
-              <div className="grid grid-cols-2 gap-3 bg-blue-50/50 p-3 rounded-lg border border-blue-100">
-                <div>
-                  <label className="block text-xs font-semibold text-blue-700 mb-1">Môn học <span className="text-red-500">*</span></label>
-                  <select
-                    value={isCustomSubject ? '__custom__' : inputData.subject}
-                    onChange={e => {
-                      if (e.target.value === '__custom__') {
-                        setIsCustomSubject(true);
-                        setInputData(prev => ({ ...prev, subject: '' }));
-                      } else {
-                        setIsCustomSubject(false);
-                        setInputData(prev => ({ ...prev, subject: e.target.value }));
-                      }
-                    }}
-                    className="w-full px-2.5 py-2 input-elevated text-sm"
-                  >
-                    <option value="">-- Chọn môn học --</option>
-                    <option value="Toán học">Toán học</option>
-                    <option value="Ngữ văn">Ngữ văn</option>
-                    <option value="Tiếng Anh">Tiếng Anh</option>
-                    <option value="Vật lí">Vật lí</option>
-                    <option value="Hóa học">Hóa học</option>
-                    <option value="Sinh học">Sinh học</option>
-                    <option value="Lịch sử">Lịch sử</option>
-                    <option value="Địa lí">Địa lí</option>
-                    <option value="Tin học">Tin học</option>
-                    <option value="Công nghệ">Công nghệ</option>
-                    <option value="Giáo dục công dân">Giáo dục công dân (GD KT&PL)</option>
-                    <option value="__custom__">Môn khác...</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-blue-700 mb-1">Khối lớp <span className="text-red-500">*</span></label>
-                  <select
-                    value={inputData.grade}
-                    onChange={e => setInputData(prev => ({ ...prev, grade: e.target.value }))}
-                    className="w-full px-2.5 py-2 input-elevated text-sm"
-                  >
-                    <option value="">-- Chọn khối --</option>
-                    <option value="1">Lớp 1</option>
-                    <option value="2">Lớp 2</option>
-                    <option value="3">Lớp 3</option>
-                    <option value="4">Lớp 4</option>
-                    <option value="5">Lớp 5</option>
-                    <option value="6">Lớp 6</option>
-                    <option value="7">Lớp 7</option>
-                    <option value="8">Lớp 8</option>
-                    <option value="9">Lớp 9</option>
-                    <option value="10">Lớp 10</option>
-                    <option value="11">Lớp 11</option>
-                    <option value="12">Lớp 12</option>
-                  </select>
-                </div>
+              <div className="bg-blue-50/50 p-3 rounded-lg border border-blue-100">
+                <label className="block text-xs font-semibold text-blue-700 mb-1">Khối lớp (môn Hóa học) <span className="text-red-500">*</span></label>
+                <select
+                  value={inputData.grade}
+                  onChange={e => setInputData(prev => ({ ...prev, grade: e.target.value }))}
+                  className="w-full sm:w-48 px-2.5 py-2 input-elevated text-sm"
+                >
+                  {CHEMISTRY_GRADES.map(g => <option key={g} value={g}>Lớp {g}</option>)}
+                </select>
               </div>
 
               <div className="flex items-center justify-between gap-3">
-                <p className="text-xs text-blue-500">✓ Khai báo môn/lớp trước để hệ thống nhận diện chính xác</p>
+                <p className="text-xs text-blue-500">✓ Khai báo lớp trước để hệ thống nhận diện chính xác</p>
                 <input
                   type="file"
                   ref={matrixDirectUploadRef}
@@ -1296,60 +1180,15 @@ const App: React.FC = () => {
                 <p className="text-sm text-emerald-600">Tải lên cả 2 file để nhảy thẳng sang bước tạo đề thi!</p>
               </div>
               
-              {/* 🔴 KHAI BÁO MÔN & LỚP TRƯỚC KHI UPLOAD (Tránh nhầm lẫn) */}
-              <div className="grid grid-cols-2 gap-3 bg-emerald-50/50 p-3 rounded-lg border border-emerald-100">
-                <div>
-                  <label className="block text-xs font-semibold text-emerald-700 mb-1">Môn học <span className="text-red-500">*</span></label>
-                  <select
-                    value={isCustomSubject ? '__custom__' : inputData.subject}
-                    onChange={e => {
-                      if (e.target.value === '__custom__') {
-                        setIsCustomSubject(true);
-                        setInputData(prev => ({ ...prev, subject: '' }));
-                      } else {
-                        setIsCustomSubject(false);
-                        setInputData(prev => ({ ...prev, subject: e.target.value }));
-                      }
-                    }}
-                    className="w-full px-2.5 py-2 input-elevated text-sm"
-                  >
-                    <option value="">-- Chọn môn học --</option>
-                    <option value="Toán học">Toán học</option>
-                    <option value="Ngữ văn">Ngữ văn</option>
-                    <option value="Tiếng Anh">Tiếng Anh</option>
-                    <option value="Vật lí">Vật lí</option>
-                    <option value="Hóa học">Hóa học</option>
-                    <option value="Sinh học">Sinh học</option>
-                    <option value="Lịch sử">Lịch sử</option>
-                    <option value="Địa lí">Địa lí</option>
-                    <option value="Tin học">Tin học</option>
-                    <option value="Công nghệ">Công nghệ</option>
-                    <option value="Giáo dục công dân">Giáo dục công dân (GD KT&PL)</option>
-                    <option value="__custom__">Môn khác...</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-emerald-700 mb-1">Khối lớp <span className="text-red-500">*</span></label>
-                  <select
-                    value={inputData.grade}
-                    onChange={e => setInputData(prev => ({ ...prev, grade: e.target.value }))}
-                    className="w-full px-2.5 py-2 input-elevated text-sm"
-                  >
-                    <option value="">-- Chọn khối --</option>
-                    <option value="1">Lớp 1</option>
-                    <option value="2">Lớp 2</option>
-                    <option value="3">Lớp 3</option>
-                    <option value="4">Lớp 4</option>
-                    <option value="5">Lớp 5</option>
-                    <option value="6">Lớp 6</option>
-                    <option value="7">Lớp 7</option>
-                    <option value="8">Lớp 8</option>
-                    <option value="9">Lớp 9</option>
-                    <option value="10">Lớp 10</option>
-                    <option value="11">Lớp 11</option>
-                    <option value="12">Lớp 12</option>
-                  </select>
-                </div>
+              <div className="bg-emerald-50/50 p-3 rounded-lg border border-emerald-100">
+                <label className="block text-xs font-semibold text-emerald-700 mb-1">Khối lớp (môn Hóa học) <span className="text-red-500">*</span></label>
+                <select
+                  value={inputData.grade}
+                  onChange={e => setInputData(prev => ({ ...prev, grade: e.target.value }))}
+                  className="w-full sm:w-48 px-2.5 py-2 input-elevated text-sm"
+                >
+                  {CHEMISTRY_GRADES.map(g => <option key={g} value={g}>Lớp {g}</option>)}
+                </select>
               </div>
             </div>
 
@@ -1424,91 +1263,53 @@ const App: React.FC = () => {
         <span className="relative bg-white px-4 py-1 text-xs font-bold text-teal-500 uppercase tracking-wider rounded-full border border-teal-100">Hoặc bắt đầu từ đầu</span>
       </div>
 
-      {/* 1. Basic Info & Upload */}
+      {/* 1. Thiết lập đề 1 chạm */}
       <div className="card-elevated p-6 sm:p-8 animate-fade-in-up">
-        <h2 className="text-xl font-bold text-teal-800 mb-6 flex items-center gap-2.5">
+        <h2 className="text-xl font-bold text-teal-800 mb-2 flex items-center gap-2.5">
           <span className="badge-section text-white w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold">1</span>
-          Thông tin chung & Upload PPCT
+          Chọn loại đề (thiết lập 1 chạm)
         </h2>
+        <p className="text-sm text-slate-500 mb-4">Môn Hóa học, bộ sách {TEXTBOOK_NAME}. Chọn loại đề, app tự đặt số câu, thời gian và thang điểm.</p>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
-          <div>
-            <label className="block text-sm font-semibold text-teal-700 mb-2">Môn học</label>
-            <select
-              name="subject"
-              value={isCustomSubject ? '__custom__' : inputData.subject}
-              onChange={(e) => {
-                if (e.target.value === '__custom__') {
-                  setIsCustomSubject(true);
-                  setInputData(prev => ({ ...prev, subject: '' }));
-                } else {
-                  setIsCustomSubject(false);
-                  handleInputChange(e);
-                }
-              }}
-              className="w-full p-3 input-elevated focus:ring-2 focus:ring-primary outline-none"
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
+          {EXAM_PRESETS.map(preset => (
+            <button
+              key={preset.id}
+              type="button"
+              aria-pressed={presetId === preset.id}
+              onClick={() => applyExamSetup({ presetId: preset.id })}
+              className={`p-3.5 rounded-xl border-2 text-left transition-all ${presetId === preset.id ? 'border-teal-500 bg-teal-50 shadow-sm' : 'border-slate-200 hover:border-teal-300 hover:bg-teal-50/30'}`}
             >
-              <option value="">-- Chọn môn học --</option>
-              <option value="Toán học">Toán học</option>
-              <option value="Ngữ văn">Ngữ văn</option>
-              <option value="Tiếng Anh">Tiếng Anh</option>
-              <option value="Vật lí">Vật lí</option>
-              <option value="Hóa học">Hóa học</option>
-              <option value="Sinh học">Sinh học</option>
-              <option value="Lịch sử">Lịch sử</option>
-              <option value="Địa lí">Địa lí</option>
-              <option value="Tin học">Tin học</option>
-              <option value="Công nghệ">Công nghệ</option>
-              <option value="Giáo dục công dân">Giáo dục công dân (GD KT&PL)</option>
-              <option value="Giáo dục thể chất">Giáo dục thể chất</option>
-              <option value="Âm nhạc">Âm nhạc</option>
-              <option value="Mỹ thuật">Mỹ thuật</option>
-              <option value="Khoa học tự nhiên">Khoa học tự nhiên</option>
-              <option value="Lịch sử và Địa lí">Lịch sử và Địa lí</option>
-              <option value="Hoạt động trải nghiệm">Hoạt động trải nghiệm, hướng nghiệp</option>
-              <option value="__custom__">✏️ Nhập môn khác...</option>
-            </select>
-            {isCustomSubject && (
-              <input
-                type="text"
-                name="subject"
-                value={inputData.subject}
-                onChange={handleInputChange}
-                placeholder="Nhập tên môn học của bạn..."
-                className="w-full p-3 mt-2 input-elevated focus:ring-2 focus:ring-primary outline-none"
-                autoFocus
-              />
-            )}
-          </div>
+              <span className="block text-sm font-bold text-teal-900">{preset.label}</span>
+              <span className="block text-xs text-slate-500 mt-1 leading-relaxed">{preset.description}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
           <div>
             <label className="block text-sm font-semibold text-teal-700 mb-2">Khối lớp</label>
-            <select name="grade" value={inputData.grade} onChange={handleInputChange} className="w-full p-3 input-elevated focus:ring-2 focus:ring-primary outline-none">
-              <option value="">-- Chọn khối lớp --</option>
-              <option value="1">Lớp 1</option>
-              <option value="2">Lớp 2</option>
-              <option value="3">Lớp 3</option>
-              <option value="4">Lớp 4</option>
-              <option value="5">Lớp 5</option>
-              <option value="6">Lớp 6</option>
-              <option value="7">Lớp 7</option>
-              <option value="8">Lớp 8</option>
-              <option value="9">Lớp 9</option>
-              <option value="10">Lớp 10</option>
-              <option value="11">Lớp 11</option>
-              <option value="12">Lớp 12</option>
+            <select
+              value={inputData.grade}
+              disabled={!!getPreset(presetId)?.allGrades}
+              onChange={e => applyExamSetup({ grade: e.target.value })}
+              className="w-full p-3 input-elevated focus:ring-2 focus:ring-primary outline-none disabled:opacity-70"
+            >
+              {CHEMISTRY_GRADES.map(g => <option key={g} value={g}>Lớp {g}</option>)}
             </select>
+            {getPreset(presetId)?.allGrades && <p className="text-xs text-slate-500 mt-1">Đề ôn thi lấy kiến thức cả 3 khối, trọng tâm lớp 12.</p>}
           </div>
-          <div>
-            <label className="block text-sm font-semibold text-teal-700 mb-2">Loại kiểm tra (Auto Filter)</label>
-            <select name="examType" value={inputData.examType} onChange={handleInputChange} className="w-full p-3 input-elevated focus:ring-2 focus:ring-primary outline-none">
-              <option>Kiểm tra 15 phút</option>
-              <option>Kiểm tra 45 phút</option>
-              <option>Giữa kỳ 1</option>
-              <option>Cuối kỳ 1</option>
-              <option>Giữa kỳ 2</option>
-              <option>Cuối kỳ 2</option>
-            </select>
-          </div>
+          {getPreset(presetId)?.group === 'dinh-ky' && (
+            <div>
+              <label className="block text-sm font-semibold text-teal-700 mb-2">Kỳ kiểm tra</label>
+              <select value={semesterExam} onChange={e => applyExamSetup({ semesterExam: e.target.value })} className="w-full p-3 input-elevated focus:ring-2 focus:ring-primary outline-none">
+                <option>Giữa kỳ 1</option>
+                <option>Cuối kỳ 1</option>
+                <option>Giữa kỳ 2</option>
+                <option>Cuối kỳ 2</option>
+              </select>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-semibold text-teal-700 mb-2">Thời gian (phút)</label>
             <div className="relative">
@@ -1518,6 +1319,99 @@ const App: React.FC = () => {
           </div>
         </div>
 
+        {getPreset(presetId)?.customPoints && (
+          <div className="mb-5 p-3 rounded-xl border border-teal-100 bg-teal-50/40">
+            <span className="block text-sm font-semibold text-teal-700 mb-2">Tỉ trọng điểm từng phần (tổng phải bằng 10)</span>
+            <div className="flex flex-wrap items-end gap-3">
+              {([['type1', 'Phần I'], ['type2', 'Phần II'], ['type3', 'Phần III']] as const).map(([key, name]) => (
+                <label key={key} className="text-xs text-slate-600">
+                  <span className="block mb-1">{name}</span>
+                  <input
+                    type="number" min={0} max={10} step={0.25}
+                    value={customPoints[key]}
+                    onChange={e => {
+                      const points = { ...customPoints, [key]: Number(e.target.value) || 0 };
+                      setCustomPoints(points);
+                      applyExamSetup({ points });
+                    }}
+                    className="w-20 p-2 input-elevated text-center text-sm"
+                  />
+                </label>
+              ))}
+              <span className={`text-xs font-semibold pb-2 ${customPoints.type1 + customPoints.type2 + customPoints.type3 === 10 ? 'text-emerald-700' : 'text-red-600'}`}>
+                Tổng: {String(customPoints.type1 + customPoints.type2 + customPoints.type3).replace('.', ',')} điểm
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Tỉ lệ cấp độ tư duy */}
+        <div className="p-4 rounded-xl border border-teal-100 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <span className="text-sm font-semibold text-teal-700">Tỉ lệ cấp độ tư duy (theo điểm)</span>
+            <div className="flex flex-wrap gap-2">
+              {RATIO_SHORTCUTS.map(item => (
+                <button key={item.label} type="button" onClick={() => applyExamSetup({ ratio: item.ratio })} className="text-xs px-2.5 py-1 rounded-lg border border-teal-200 text-teal-700 hover:bg-teal-50">
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="text-xs text-slate-600">
+              <span className="flex justify-between mb-1"><span>Biết</span><strong>{levelRatio.biet}%</strong></span>
+              <input
+                type="range" min={10} max={70} step={5} value={levelRatio.biet} className="w-full"
+                onChange={e => {
+                  const biet = Number(e.target.value);
+                  const hieu = Math.min(levelRatio.hieu, 90 - biet);
+                  applyExamSetup({ ratio: { biet, hieu, vd: 100 - biet - hieu } });
+                }}
+              />
+            </label>
+            <label className="text-xs text-slate-600">
+              <span className="flex justify-between mb-1"><span>Hiểu</span><strong>{levelRatio.hieu}%</strong></span>
+              <input
+                type="range" min={10} max={70} step={5} value={levelRatio.hieu} className="w-full"
+                onChange={e => {
+                  const hieu = Math.min(Number(e.target.value), 90 - levelRatio.biet);
+                  applyExamSetup({ ratio: { biet: levelRatio.biet, hieu, vd: 100 - levelRatio.biet - hieu } });
+                }}
+              />
+            </label>
+          </div>
+          {(() => {
+            const actual = actualLevelPercent(inputData.questionConfig);
+            return (
+              <p className="text-xs text-slate-500 mt-2">
+                Mục tiêu: Biết {levelRatio.biet}% – Hiểu {levelRatio.hieu}% – Vận dụng {levelRatio.vd}%. Sau khi chia theo số câu: Biết {actual.biet}% – Hiểu {actual.hieu}% – Vận dụng {actual.vd}%.
+              </p>
+            );
+          })()}
+        </div>
+      </div>
+
+      {/* Mẫu tiêu đề đề thi */}
+      <details className="card-elevated p-6 sm:p-8 animate-fade-in-up">
+        <summary className="cursor-pointer text-base font-bold text-teal-800">Mẫu tiêu đề đề thi của đơn vị (lưu cho các lần sau)</summary>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+          {([['department', 'Sở Giáo dục và Đào tạo'], ['school', 'Tên trường'], ['group', 'Tổ chuyên môn'], ['schoolYear', 'Năm học']] as const).map(([key, name]) => (
+            <label key={key} className="block text-xs font-semibold text-teal-700">
+              <span className="block mb-1">{name}</span>
+              <input value={headerProfile[key]} onChange={e => updateHeaderProfile({ [key]: e.target.value })} className="w-full p-2.5 input-elevated text-sm font-normal" />
+            </label>
+          ))}
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={headerProfile.showInvigilator} onChange={e => updateHeaderProfile({ showInvigilator: e.target.checked })} />
+            In dòng chữ kí giám thị
+          </label>
+          <button type="button" onClick={() => updateHeaderProfile(DEFAULT_HEADER_PROFILE)} className="text-xs text-teal-700 underline text-left">Khôi phục mẫu mặc định</button>
+        </div>
+      </details>
+
+      {/* PPCT riêng của trường (không bắt buộc) */}
+      <div className="card-elevated p-5 animate-fade-in-up">
+        <p className="text-sm text-slate-600 mb-3">Đã nạp sẵn chương trình lớp 10, 11, 12 sách {TEXTBOOK_NAME}. Trường có phân phối chương trình riêng thì tải lên để thay thế (không bắt buộc).</p>
         <div className="p-5 upload-zone text-center relative">
           <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".pdf,.docx,.doc" className="hidden" id="file-upload" disabled={isAnalyzingFile} />
           <label htmlFor="file-upload" className={`cursor-pointer flex flex-col items-center justify-center ${isAnalyzingFile ? 'opacity-70' : ''}`}>
@@ -1538,7 +1432,7 @@ const App: React.FC = () => {
             ) : uploadedFileName ? (
               <div className="flex items-center gap-2 text-green-700 font-medium"><Check className="w-5 h-5" /> {uploadedFileName} (Click thay đổi)</div>
             ) : (
-              <div className="flex items-center gap-2 text-primary font-medium"><Upload className="w-5 h-5" /> Upload File PPCT (.pdf, .docx)</div>
+              <div className="flex items-center gap-2 text-primary font-medium"><Upload className="w-5 h-5" /> Tải PPCT của trường (.pdf, .docx)</div>
             )}
           </label>
           {isAnalyzingFile && (
@@ -1546,45 +1440,6 @@ const App: React.FC = () => {
               Hủy phân tích
             </button>
           )}
-          <p className="text-xs text-slate-500 mt-2 italic">📌 Hỗ trợ file <strong>.pdf</strong> và <strong>.docx</strong> (Word). Công thức toán MathType sẽ được tự động trích xuất.</p>
-        </div>
-      </div>
-
-      {/* === MATRIX TEMPLATE SELECTOR === */}
-      <div className="card-elevated p-6 sm:p-8 animate-fade-in-up" style={{ animationDelay: '0.05s' }}>
-        <h2 className="text-xl font-bold text-teal-800 mb-4 flex items-center gap-2.5">
-          <span className="badge-section text-white w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold">✦</span>
-          Chọn mẫu Ma trận – Đặc tả
-        </h2>
-        <p className="text-sm text-slate-500 mb-4">Chọn mẫu format bảng Ma trận & Đặc tả mà AI sẽ sinh ra.</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {MATRIX_TEMPLATES.map((tmpl) => (
-            <button
-              key={tmpl.id}
-              onClick={() => setMatrixTemplate(tmpl.id)}
-              className={`relative flex flex-col items-start p-4 rounded-xl border-2 transition-all text-left group ${matrixTemplate === tmpl.id
-                ? 'border-teal-500 bg-teal-50 shadow-md shadow-teal-100'
-                : 'border-slate-200 hover:border-teal-300 hover:bg-teal-50/30'
-                }`}
-            >
-              {/* Radio indicator */}
-              <div className="absolute top-3 right-3">
-                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${matrixTemplate === tmpl.id ? 'border-teal-500 bg-teal-500' : 'border-slate-300'
-                  }`}>
-                  {matrixTemplate === tmpl.id && (
-                    <div className="w-2 h-2 rounded-full bg-white" />
-                  )}
-                </div>
-              </div>
-              {/* Content */}
-              <span className="text-2xl mb-2">{tmpl.icon}</span>
-              <span className="text-sm font-bold text-teal-800 pr-6">{tmpl.name}</span>
-              <span className="text-xs text-slate-500 mt-1 leading-relaxed">{tmpl.description}</span>
-              {tmpl.badge && (
-                <span className="mt-2 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-teal-100 text-teal-700">{tmpl.badge}</span>
-              )}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -1644,8 +1499,18 @@ const App: React.FC = () => {
                           <div className="flex-1 text-sm text-teal-700">
                             {lesson.name}
                           </div>
-                          <div className="flex gap-2 opacity-70 group-hover:opacity-100">
-                            <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded">{lesson.periods} tiết</span>
+                          <div className="flex items-center gap-2 opacity-70 group-hover:opacity-100">
+                            <label className="flex items-center gap-1 text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded" title="Số tiết gợi ý, sửa theo PPCT của trường">
+                              <input
+                                type="number"
+                                min={1}
+                                aria-label={`Số tiết của ${lesson.name}`}
+                                value={lesson.periods}
+                                onChange={e => updateLessonPeriods(chap.id, lesson.id, Math.max(1, Number(e.target.value) || 1))}
+                                className="w-8 bg-white rounded text-center"
+                              />
+                              tiết
+                            </label>
                             {lesson.weekEnd && <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">Tuần {lesson.weekStart}-{lesson.weekEnd}</span>}
                           </div>
                         </div>
@@ -1728,7 +1593,6 @@ const App: React.FC = () => {
     ]));
     const tone = !primary ? 'red' : warnings.length ? 'amber' : 'emerald';
     const box = tone === 'red' ? 'bg-red-50 border-red-200 text-red-900' : tone === 'amber' ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-emerald-50/90 border-emerald-200 text-emerald-900';
-    const subjectOptions = inputData.subject && !SUBJECT_OPTIONS.includes(inputData.subject) ? [...SUBJECT_OPTIONS, inputData.subject] : SUBJECT_OPTIONS;
     const pointsText = primary?.sections
       ? primary.sections.filter(sec => sec.points !== undefined).map(sec => `${sec.name}: ${fmtNum(sec.points!)}đ`).join(' · ')
       : primary?.points.fromFile
@@ -1743,23 +1607,7 @@ const App: React.FC = () => {
               {primary ? <Check className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
               {primary ? `Đã đọc từ ${source} tải lên:` : 'Không đọc được số câu từ file:'}
             </span>
-            <label className="flex items-center gap-1">Môn:
-              <select
-                value={inputData.subject}
-                onChange={e => {
-                  let v = e.target.value;
-                  if (v === '__custom__') v = (window.prompt('Nhập tên môn học:', '') || '').trim();
-                  if (!v) return;
-                  setIsCustomSubject(!SUBJECT_OPTIONS.includes(v));
-                  setInputData(prev => ({ ...prev, subject: v }));
-                }}
-                className={`px-1.5 py-0.5 rounded border bg-white text-xs font-semibold ${inputData.subject ? 'border-slate-300' : 'border-red-400'}`}
-              >
-                <option value="">-- Chọn môn --</option>
-                {subjectOptions.map(o => <option key={o} value={o}>{o}</option>)}
-                <option value="__custom__">Môn khác…</option>
-              </select>
-            </label>
+            <span>Môn: <strong>{CHEMISTRY_SUBJECT}</strong></span>
             <label className="flex items-center gap-1">Lớp:
               <select
                 value={inputData.grade}
@@ -1767,7 +1615,7 @@ const App: React.FC = () => {
                 className={`px-1.5 py-0.5 rounded border bg-white text-xs font-semibold ${inputData.grade ? 'border-slate-300' : 'border-red-400'}`}
               >
                 <option value="">--</option>
-                {Array.from({ length: 12 }, (_, i) => String(i + 1)).map(g => <option key={g} value={g}>{g}</option>)}
+                {CHEMISTRY_GRADES.map(g => <option key={g} value={g}>{g}</option>)}
               </select>
             </label>
             <span>Kỳ: <strong>{inputData.examType}</strong></span>
@@ -1817,6 +1665,8 @@ const App: React.FC = () => {
               ? `Kiểm tra tự động: đề đúng số câu từng phần${examCheck.usedContract ? ' theo ma trận / đặc tả' : ''}, đủ phương án và đáp án.`
               : `Kiểm tra tự động phát hiện ${errors.length} lỗi cấu trúc — vui lòng xem lại hoặc tạo lại đề.`}
             {examCheck.repaired && <span className="font-normal">(app đã tự sửa đề 1 lần)</span>}
+            {examCheck.verifiedCount !== null && <span className="font-normal">AI đã giải lại độc lập {examCheck.verifiedCount} câu để đối chiếu đáp án.</span>}
+            {examCheck.roundingAdded.length > 0 && <span className="font-normal">Đã thêm câu lệnh làm tròn ở Phần III câu {examCheck.roundingAdded.join(', ')}.</span>}
           </span>
           {!ok && (
             <button
@@ -1847,7 +1697,7 @@ const App: React.FC = () => {
     isLastStep: boolean = false,
     onUpdateContent: (val: string) => void
   ) => (
-    <div className="max-w-[1400px] mx-auto h-full flex flex-col p-4 sm:p-6">
+    <div className="max-w-[1400px] mx-auto h-full flex flex-col p-4 sm:p-6 overflow-y-auto">
       <div className="flex flex-wrap justify-between items-center gap-3 mb-4 card-elevated p-4 flex-shrink-0">
         <h2 className="text-xl font-bold text-teal-800 flex items-center gap-2.5">
           <span className="w-8 h-8 rounded-full badge-section text-white flex items-center justify-center text-sm shrink-0 font-bold">
@@ -1929,11 +1779,22 @@ const App: React.FC = () => {
 
       {/* Đảo đề: tạo nhiều mã đề + file đáp án từ đề vừa sinh */}
       {isLastStep && content && !genState.isLoading && (
-        <ShuffleExamPanel
-          className="mb-4"
-          documents={[{ id: 'exam', label: 'Đề thi', exam: content }]}
-          baseName={`De_${inputData.subject}_${inputData.grade}`.replace(/\s+/g, '_')}
-        />
+        <>
+          <ExamPackagePanel
+            className="mb-3"
+            examHtml={content}
+            matrixHtml={genState.matrix}
+            specsHtml={genState.specs}
+            inputData={inputData}
+            baseName={`De_Hoa_hoc_${inputData.grade}`}
+          />
+          <ShuffleExamPanel
+            className="mb-3"
+            documents={[{ id: 'exam', label: 'Đề thi', exam: content }]}
+            baseName={`De_Hoa_hoc_${inputData.grade}`}
+            levelOf={buildLevelOf(genState.matrix, genState.specs)}
+          />
+        </>
       )}
 
       {/* Reference Document Upload - Only for SPECS step */}
@@ -2011,10 +1872,26 @@ const App: React.FC = () => {
                   Tham khảo dạng câu hỏi, thay số hoặc bối cảnh cho phù hợp
                 </div>
                 <p className="text-[11px] text-slate-500 leading-snug mt-0.5">
-                  Giữ dạng bài từ tài liệu nhưng thay đổi số liệu, hàm số hoặc bối cảnh thực tế và giải lại đáp án.
+                  Giữ dạng bài từ tài liệu nhưng thay đổi số liệu, chất hoặc bối cảnh thực tế và giải lại đáp án.
                 </p>
               </div>
             </button>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={handleLoadSampleExams}
+              disabled={isParsingReference}
+              className="text-xs font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 px-2.5 py-1.5 rounded-lg transition-colors flex items-center gap-1 disabled:opacity-60"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              Nạp 2 đề mẫu Tốt nghiệp THPT 2026
+            </button>
+            <label className="flex items-center gap-1.5 text-xs text-slate-700" title="Sau khi sinh đề, AI giải lại từng câu không nhìn đáp án rồi so khớp; sai khác sẽ được tự sửa 1 lần. Tốn thêm một lượt gọi AI.">
+              <input type="checkbox" checked={verifyAnswers} onChange={e => setVerifyAnswers(e.target.checked)} />
+              Kiểm chứng đáp án bằng AI giải lại
+            </label>
           </div>
 
           <input
@@ -2124,7 +2001,7 @@ const App: React.FC = () => {
                       type="button"
                       onClick={handleDeepAiExtractReference}
                       className="text-[11px] font-semibold text-teal-700 hover:text-teal-900 bg-white/80 hover:bg-white px-2.5 py-1 rounded-md border border-emerald-200 transition-colors flex items-center gap-1"
-                      title="Dùng AI quét sâu thêm (hữu ích nếu tài liệu có nhiều hình công thức MathType hoặc PDF scan)"
+                      title="Dùng AI quét sâu thêm (hữu ích nếu tài liệu có nhiều hình công thức hoặc PDF scan)"
                     >
                       <Sparkles className="w-3 h-3" />
                       Quét sâu bằng AI
@@ -2178,13 +2055,13 @@ const App: React.FC = () => {
       )}
 
       {currentStep === AppStep.EXAM && (
-        <BbtQuickGenerator
-          examContent={content}
-          onUpdateExamContent={onUpdateContent}
+        <ChemFigurePanel
+          className="mb-3"
+          documents={[{ id: 'exam', label: 'Đề thi', content, onUpdate: onUpdateContent }]}
         />
       )}
 
-      <div className="flex-1 min-h-0 flex flex-col pb-2 relative">
+      <div className="flex-1 min-h-[75vh] flex flex-col pb-2 relative">
         {/* Loading overlay when generating additional exam from history */}
         {genState.isLoading && isLastStep && (
           <div className="absolute inset-0 z-20 bg-white/85 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center gap-3 p-6 text-center">
@@ -2204,7 +2081,7 @@ const App: React.FC = () => {
             <label className="text-xs font-bold text-primary uppercase tracking-wider">Xem trước</label>
           </div>
           <div className="flex-1 overflow-auto bg-white p-2">
-            <MarkdownView content={content} />
+            <MarkdownView content={content} examLayout={currentStep === AppStep.EXAM} />
           </div>
         </div>
       </div>
@@ -2213,28 +2090,18 @@ const App: React.FC = () => {
 
   const handleReset = () => {
     if (window.confirm("Tạo mới sẽ xóa toàn bộ dữ liệu hiện tại?")) {
-      setInputData({
-        subject: '', grade: '', duration: 45, examType: 'Giữa kỳ 1', topics: '', additionalNotes: '',
-        chapters: [],
-        questionConfig: {
-          type1: { biet: 8, hieu: 4, van_dung: 0, van_dung_cao: 0 },
-          type2: { biet: 1, hieu: 1, van_dung: 0, van_dung_cao: 0 },
-      type2QuestionCount: 2,
-      dungSaiLevelConfigs: [{ ...DEFAULT_DUNG_SAI_LEVELS }, { ...DEFAULT_DUNG_SAI_LEVELS }],
-          type3: { biet: 1, hieu: 1, van_dung: 2, van_dung_cao: 0 },
-          essay: { biet: 0, hieu: 0, van_dung: 0, van_dung_cao: 0 },
-        }
-      });
+      setInputData(buildInitialInput());
+      setPresetId(DEFAULT_PRESET_ID);
+      setSemesterExam(DEFAULT_SEMESTER_EXAM);
+      setLevelRatio(DEFAULT_LEVEL_RATIO);
       setUploadedFileName(null);
-      setIsCustomSubject(false);
       setIsUploadedMatrix(false);
       setContracts(null);
       setExamCheck(null);
       setCurrentStep(AppStep.INPUT);
       setCompletedSteps(0);
-      setSelectedLessonIds(new Set());
-      setExpandedChapterIds(new Set());
-      setMatrixTemplate('template1');
+      setSelectedLessonIds(lessonIdsForExam(DEFAULT_SEMESTER_EXAM, getChemistryChapters(DEFAULT_GRADE)));
+      setExpandedChapterIds(new Set(getChemistryChapters(DEFAULT_GRADE).map(c => c.id)));
       setReferenceDocs([]);
       setReferenceMode('exact');
       setExtractedQuestions([]);
@@ -2416,7 +2283,7 @@ const App: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-sm font-bold text-teal-800">Liên hệ Zalo để mua tài khoản</p>
-                    <a href="https://zalo.me/0348296773" target="_blank" rel="noopener noreferrer" className="text-lg font-bold text-blue-600 hover:underline">0348296773</a>
+                    <a href={`https://zalo.me/${APP_INFO.contactZalo}`} target="_blank" rel="noopener noreferrer" className="text-lg font-bold text-blue-600 hover:underline">{APP_INFO.contactZalo}</a>
                   </div>
                 </div>
 
@@ -2604,12 +2471,12 @@ const App: React.FC = () => {
       <header className="glass-header shrink-0 z-20">
         <div className="max-w-[1600px] mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 badge-section rounded-xl flex items-center justify-center text-white font-bold text-lg">
-              AI
+            <div className="w-9 h-9 badge-section rounded-xl flex items-center justify-center text-white">
+              <FlaskConical className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-teal-900 leading-tight">TẠO ĐỀ THI THEO CV 7991</h1>
-              <p className="text-xs text-slate-500 leading-tight">Phát triển bởi thầy Trần Hoài Thanh - zalo 0348296773</p>
+              <h1 className="text-lg font-bold text-teal-900 leading-tight">{APP_INFO.name}</h1>
+              <p className="text-xs text-slate-500 leading-tight">{APP_INFO.author} · {APP_INFO.school} · {APP_INFO.specialty}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -2698,7 +2565,7 @@ const App: React.FC = () => {
             </button>
             <span className="text-xs text-slate-400">|</span>
             <span className="text-sm font-semibold text-slate-700">
-              {appMode === 'cv7991' && '🔧 Tạo đề theo CV 7991'}
+              {appMode === 'cv7991' && '🔧 Tạo đề theo ma trận'}
               {appMode === 'similar' && '📋 Tạo đề tương tự'}
               {appMode === 'variants' && '🔀 Sinh 3 đề biến thể'}
             </span>
@@ -2742,10 +2609,10 @@ const App: React.FC = () => {
                   Powered by Google Gemini AI
                 </div>
                 <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight mb-3">
-                  Chọn chế độ <span className="bg-gradient-to-r from-teal-600 via-blue-600 to-purple-600 bg-clip-text text-transparent">tạo đề thi</span>
+                  Tạo đề thi <span className="bg-gradient-to-r from-teal-600 via-blue-600 to-purple-600 bg-clip-text text-transparent">Hóa học THPT</span>
                 </h1>
                 <p className="text-base sm:text-lg text-slate-500 max-w-xl mx-auto">
-                  3 công cụ AI mạnh mẽ giúp soạn đề chỉ trong vài phút
+                  Lớp 10, 11, 12 và ôn thi Tốt nghiệp THPT, chuẩn GDPT 2018, sách {TEXTBOOK_NAME}
                 </p>
               </div>
 
@@ -2759,15 +2626,15 @@ const App: React.FC = () => {
                   <div className="mode-card-icon">
                     <FileText className="w-7 h-7" />
                   </div>
-                  <h3 className="text-xl font-extrabold text-teal-900 mb-2">Tạo đề theo CV 7991</h3>
+                  <h3 className="text-xl font-extrabold text-teal-900 mb-2">Tạo đề theo ma trận</h3>
                   <p className="text-sm text-teal-700/70 mb-5 leading-relaxed">
-                    Pipeline 4 bước chuẩn: Nhập liệu → Ma trận → Đặc tả → Đề thi hoàn chỉnh
+                    Chọn loại đề 1 chạm → Ma trận → Đặc tả → Đề thi và hồ sơ khảo thí
                   </p>
                   <div className="space-y-1.5 mb-6">
-                    <div className="mode-card-feature"><div className="dot" style={{ background: '#0d9488' }} /><span>Upload PPCT tự động nhận diện</span></div>
-                    <div className="mode-card-feature"><div className="dot" style={{ background: '#0d9488' }} /><span>4 dạng câu hỏi chuẩn CV 7991</span></div>
-                    <div className="mode-card-feature"><div className="dot" style={{ background: '#0d9488' }} /><span>Lối tắt nhanh nếu có sẵn Ma trận</span></div>
-                    <div className="mode-card-feature"><div className="dot" style={{ background: '#0d9488' }} /><span>Xuất Word / HTML</span></div>
+                    <div className="mode-card-feature"><div className="dot" style={{ background: '#0d9488' }} /><span>Nạp sẵn chương trình Hóa 10, 11, 12</span></div>
+                    <div className="mode-card-feature"><div className="dot" style={{ background: '#0d9488' }} /><span>Cấu trúc đề Tốt nghiệp, định kỳ, thường xuyên</span></div>
+                    <div className="mode-card-feature"><div className="dot" style={{ background: '#0d9488' }} /><span>Kiểm duyệt IUPAC, 24,79 L, đáp án 4 kí tự</span></div>
+                    <div className="mode-card-feature"><div className="dot" style={{ background: '#0d9488' }} /><span>Xuất trọn bộ 5 hồ sơ trong 1 lần bấm</span></div>
                   </div>
                   <button className="mode-card-btn" onClick={(e) => { e.stopPropagation(); setAppMode('cv7991'); }}>
                     <Zap className="w-4 h-4" />
@@ -2785,13 +2652,13 @@ const App: React.FC = () => {
                   </div>
                   <h3 className="text-xl font-extrabold text-blue-900 mb-2">Tạo đề tương tự</h3>
                   <p className="text-sm text-blue-700/70 mb-5 leading-relaxed">
-                    Upload 1 đề mẫu → AI phân tích cấu trúc & sinh đề mới giữ nguyên format
+                    Tải 1 đề Hóa mẫu → AI phân tích cấu trúc và sinh đề mới cùng dạng
                   </p>
                   <div className="space-y-1.5 mb-6">
                     <div className="mode-card-feature"><div className="dot" style={{ background: '#2563eb' }} /><span>Phân tích ma trận tự động</span></div>
-                    <div className="mode-card-feature"><div className="dot" style={{ background: '#2563eb' }} /><span>Giữ cấu trúc, thay số liệu</span></div>
+                    <div className="mode-card-feature"><div className="dot" style={{ background: '#2563eb' }} /><span>Giữ cấu trúc, thay chất và số liệu</span></div>
                     <div className="mode-card-feature"><div className="dot" style={{ background: '#2563eb' }} /><span>Lời giải chi tiết kèm theo</span></div>
-                    <div className="mode-card-feature"><div className="dot" style={{ background: '#2563eb' }} /><span>Hỗ trợ PDF & ảnh chụp</span></div>
+                    <div className="mode-card-feature"><div className="dot" style={{ background: '#2563eb' }} /><span>Hỗ trợ Word, PDF, ảnh chụp</span></div>
                   </div>
                   <button className="mode-card-btn" onClick={(e) => { e.stopPropagation(); setAppMode('similar'); }}>
                     <Layers className="w-4 h-4" />
@@ -2809,7 +2676,7 @@ const App: React.FC = () => {
                   </div>
                   <h3 className="text-xl font-extrabold text-purple-900 mb-2">Sinh 3 đề biến thể</h3>
                   <p className="text-sm text-purple-700/70 mb-5 leading-relaxed">
-                    Upload 1 đề gốc → AI tự động sinh 3 đề khác nhau kèm đáp án chi tiết
+                    Tải 1 đề Hóa gốc → AI sinh 3 đề khác nhau kèm đáp án chi tiết
                   </p>
                   <div className="space-y-1.5 mb-6">
                     <div className="mode-card-feature"><div className="dot" style={{ background: '#7c3aed' }} /><span>3 đề biến thể từ 1 gốc</span></div>
@@ -2851,7 +2718,7 @@ const App: React.FC = () => {
                       Đăng nhập
                     </button>
                     <p className="text-xs text-slate-400 mt-3">
-                      Liên hệ Zalo <a href="https://zalo.me/0348296773" target="_blank" rel="noopener noreferrer" className="text-blue-500 font-semibold hover:underline">0348296773</a> để mua tài khoản
+                      Liên hệ Zalo <a href={`https://zalo.me/${APP_INFO.contactZalo}`} target="_blank" rel="noopener noreferrer" className="text-blue-500 font-semibold hover:underline">{APP_INFO.contactZalo}</a> để mua tài khoản
                     </p>
                   </div>
                 </div>
@@ -2938,7 +2805,7 @@ const App: React.FC = () => {
 
       {/* Footer */}
       <footer className="shrink-0 text-center py-3 text-xs text-slate-400 border-t border-slate-200/50 space-y-1">
-        <p>Tạo Đề Thi Theo CV 7991 © 2026 | Powered by Google Gemini AI</p>
+        <p>{APP_INFO.shortName} © 2026 | {APP_INFO.author} – {APP_INFO.school} – {APP_INFO.specialty}</p>
         <p>Mọi tool AI và khóa học tạo app dành cho giáo viên có tại: <a href="https://giaovienai.vercel.app/" target="_blank" rel="noopener noreferrer" className="text-teal-600 hover:text-teal-800 underline font-medium">giaovienai.vercel.app</a></p>
       </footer>
     </div>

@@ -29,6 +29,9 @@ export interface Chapter {
   totalPeriods: number;
 }
 
+/** Tổng điểm từng phần của đề */
+export interface PointScheme { type1: number; type2: number; type3: number; essay: number }
+
 // Configuration for question counts per Type and Level
 export interface QuestionConfig {
   type1: { biet: number; hieu: number; van_dung: number; van_dung_cao: number }; // Trắc nghiệm 4 lựa chọn
@@ -38,6 +41,7 @@ export interface QuestionConfig {
   type2QuestionCount?: number; // Số câu Dạng II
   dungSaiLevelConfigs?: DungSaiLevelConfig[]; // Cấp độ a,b,c,d riêng cho từng câu
   dungSaiLevelConfig?: DungSaiLevelConfig; // Dữ liệu cũ: một cấu hình áp dụng cho mọi câu
+  pointScheme?: PointScheme; // Thang điểm theo loại đề (Tốt nghiệp, Định kỳ, Thường xuyên)
 }
 
 export type DungSaiLevel = 'nhan_biet' | 'thong_hieu' | 'van_dung';
@@ -190,7 +194,7 @@ export interface ParsedImportQuestion {
 // ============================================
 // MA TRẬN ĐẶC TẢ — Mẫu template
 // ============================================
-export type MatrixTemplate = 'template1' | 'template2' | 'template3' | 'template4';
+export type MatrixTemplate = 'template1';
 
 // ============================================
 // APP MODE — Chế độ ứng dụng

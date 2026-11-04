@@ -3,16 +3,15 @@ import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import {
   renderFigureSpecToSvg,
   downloadSvgAsPng,
-  sanitizeAndValidateFigureSpec,
-  extractPrecedingQuestionContext,
   svgToDataUrl,
   svgToPngDataUrl,
   copySvgAsPngToClipboard,
-  parseHtmlBbtTableToSpec,
 } from '../services/figureEngine';
+import { normalizeChemText } from '../services/chemFormat';
 
 interface MarkdownRendererProps {
   content: string;
@@ -43,10 +42,14 @@ const FigureImageCard: React.FC<{ svg: string; figureType?: string }> = ({ svg, 
   };
 
   const labelMap: Record<string, string> = {
-    bbt: 'Bảng biến thiên (300 DPI)',
-    graph: 'Đồ thị hàm số (300 DPI)',
-    geo2d: 'Hình học phẳng 2D (300 DPI)',
-    geo3d: 'Hình học không gian 3D (300 DPI)',
+    apparatus: 'Bộ thí nghiệm (300 DPI)',
+    glassware: 'Dụng cụ thí nghiệm (300 DPI)',
+    ir: 'Phổ hồng ngoại (300 DPI)',
+    ms: 'Phổ khối lượng (300 DPI)',
+    structure: 'Công thức cấu tạo (300 DPI)',
+    haworth: 'Mạch vòng Haworth (300 DPI)',
+    peptide: 'Chuỗi peptide (300 DPI)',
+    polymer: 'Mắt xích polymer (300 DPI)',
   };
 
   const badgeLabel = (figureType && labelMap[figureType]) || 'Hình minh hoạ (300 DPI)';
@@ -84,48 +87,25 @@ const FigureImageCard: React.FC<{ svg: string; figureType?: string }> = ({ svg, 
 };
 
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, className }) => {
-  // Chuyển các thẻ <script class="figure-json">...</script>, :::figure...::: và <table class="bbt-table"> sang khối ```figure-json
+  // Chuẩn hóa công thức hóa học; đổi <script class="figure-json">…</script>, :::figure…::: thành khối ```figure-json
   const normalizedContent = React.useMemo(() => {
     if (!content) return '';
-    let withFences = content.replace(
-      /<script[^>]*class=["'][^"']*figure-json[^"']*["'][^>]*>([\s\S]*?)<\/script>/gi,
-      (_m, body) => `\n\`\`\`figure-json\n${String(body).trim()}\n\`\`\`\n`
-    );
-    withFences = withFences.replace(
-      /:::figure\s*([\s\S]*?):::/gi,
-      (_m, body) => `\n\`\`\`figure-json\n${String(body).trim()}\n\`\`\`\n`
-    );
-    withFences = withFences.replace(
-      /<table[^>]*class=["'][^"']*bbt-table[^"']*["'][^>]*>([\s\S]*?)<\/table>/gi,
-      (fullTable) => {
-        const spec = parseHtmlBbtTableToSpec(fullTable);
-        if (spec) {
-          return `\n\`\`\`figure-json\n${JSON.stringify({ type: 'bbt', ...spec })}\n\`\`\`\n`;
-        }
-        return fullTable;
-      }
-    );
-    return withFences.replace(
-      /```figure-json\s*([\s\S]*?)```/gi,
-      (full, jsonBody, offset) => {
-        try {
-          const before = extractPrecedingQuestionContext(withFences, Number(offset) || 0);
-          const parsed = JSON.parse(String(jsonBody).trim());
-          const fixed = sanitizeAndValidateFigureSpec(parsed, before);
-          if (!fixed) return '';
-          return `\`\`\`figure-json\n${JSON.stringify(fixed)}\n\`\`\``;
-        } catch {
-          return full;
-        }
-      }
-    );
+    return normalizeChemText(content)
+      .replace(
+        /<script[^>]*class=["'][^"']*figure-json[^"']*["'][^>]*>([\s\S]*?)<\/script>/gi,
+        (_m, body) => `\n\`\`\`figure-json\n${String(body).trim()}\n\`\`\`\n`
+      )
+      .replace(
+        /:::figure\s*([\s\S]*?):::/gi,
+        (_m, body) => `\n\`\`\`figure-json\n${String(body).trim()}\n\`\`\`\n`
+      );
   }, [content]);
 
   return (
     <div className={`markdown-content ${className || ''}`}>
       <ReactMarkdown
         remarkPlugins={[remarkMath, remarkGfm]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={[rehypeRaw, rehypeKatex]}
         components={{
           pre({ children }) {
             return <>{children}</>;
@@ -137,7 +117,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, className 
 
             if (
               lang === 'figure-json' ||
-              (lang === 'json' && /"type"\s*:\s*"(bbt|graph|geo2d|geo3d)"/i.test(rawText))
+              (lang === 'json' && /"type"\s*:\s*"(apparatus|glassware|ir|ms|structure|haworth|peptide|polymer)"/i.test(rawText))
             ) {
               let figureType: string | undefined;
               try {

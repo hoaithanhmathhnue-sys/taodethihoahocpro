@@ -3,7 +3,7 @@ import { Download, Play, RefreshCw, AlertCircle, Loader2, FileCheck, ArrowRight 
 import { Chat } from "@google/genai";
 import FileUploadZone from './FileUploadZone';
 import MarkdownRenderer from './MarkdownRenderer';
-import BbtQuickGenerator from './BbtQuickGenerator';
+import ChemFigurePanel from './ChemFigurePanel';
 import { createVariantSession, generateVariantStep1, generateVariantNextStep, cloneVariantSession, countVariantQuestions } from '../services/variantsExamService';
 import { exportToDoc } from '../services/exportUtils';
 import MathFormatSelect from './MathFormatSelect';
@@ -339,7 +339,8 @@ const VariantsExamPage: React.FC<VariantsExamPageProps> = ({ checkAuth }) => {
       })()}
 
       {(col1 || col2 || col3) && (
-        <BbtQuickGenerator
+        <ChemFigurePanel
+          className="mb-3"
           documents={[
             { id: 'col1', label: 'Đề 1', content: col1, onUpdate: setCol1 },
             { id: 'col2', label: 'Đề 2', content: col2, onUpdate: setCol2 },

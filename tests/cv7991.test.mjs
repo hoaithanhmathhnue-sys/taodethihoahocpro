@@ -80,12 +80,12 @@ t('applyCv7991Thead: thay khi khớp cột, giữ nguyên khi lệch', () => {
 });
 
 t('Prompt chứa thead chuẩn & không còn "Cấp độ tư duy" trong đặc tả', () => {
-  const data = { subject: 'Toán', grade: '10', duration: 90, examType: 'Cuối kì 1', chapters: [], questionConfig: cfg([8,4,0],[1,1,0],[2,2,0],[1,1,1]) };
+  const data = { subject: 'Hóa học', grade: '10', duration: 90, examType: 'Cuối kì 1', chapters: [], questionConfig: cfg([8,4,0],[1,1,0],[2,2,0],[1,1,1]) };
   const L = m.computeCv7991Layout(data.questionConfig, true);
   const p1 = m.buildCv7991MatrixPrompt({ data, layout: L, footnotes: '', selectedChapters: [], totalSelectedPeriods: 10 });
   assert.ok(p1.includes(m.buildCv7991MatrixThead(L)));
-  const p2 = m.buildCv7991SpecsPrompt({ data, layout: L, footnotes: '(1): Tư duy và lập luận toán học\n(2): Mô hình hóa toán học\n(3): Giải quyết vấn đề toán học', matrixContent: '', objectivesMap: [] });
-  assert.ok(p2.includes('TD: Tư duy và lập luận toán học'));
+  const p2 = m.buildCv7991SpecsPrompt({ data, layout: L, footnotes: '(1): Năng lực nhận thức hóa học\n(2): Năng lực tìm hiểu thế giới tự nhiên dưới góc độ hóa học\n(3): Năng lực vận dụng kiến thức, kĩ năng hóa học đã học', matrixContent: '<table></table>', objectivesMap: [] });
+  assert.ok(p2.includes('NT: Năng lực nhận thức hóa học'));
   assert.ok(p2.includes(m.buildCv7991SpecsThead(L)));
 });
 console.log(`\n${ok} test đạt`);

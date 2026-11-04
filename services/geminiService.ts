@@ -10,13 +10,12 @@ import {
   GEMINI_MODELS,
   AGENT_PLATFORM_MODELS,
   PROVIDER_FALLBACK_MODELS,
-  GRADE_NO_ESSAY,
   getSubjectFootnotes,
   getSystemInstruction,
+  CHEM_EXAM_RULES,
   AiProvider,
 } from '../constants';
-import { InputData, QuestionConfig, ExtractedQuestion, MatrixTemplate, ReferenceUsageMode, describeDungSaiLevels, MATRIX_FULL_COLUMNS_RULE, getDungSaiQuestionCount, getDungSaiLevelTotals } from '../types';
-import { fetchTemplateHtml, buildMatrixPromptForCustomTemplate, buildSpecsPromptForCustomTemplate } from './matrixTemplates';
+import { InputData, QuestionConfig, ExtractedQuestion, ReferenceUsageMode, describeDungSaiLevels, MATRIX_FULL_COLUMNS_RULE, getDungSaiQuestionCount, getDungSaiLevelTotals } from '../types';
 import { FIGURE_JSON_HTML_INSTRUCTIONS, renderFiguresInHtml } from './figureEngine';
 import {
   computeCv7991Layout, buildCv7991MatrixPrompt, buildCv7991SpecsPrompt,
@@ -29,6 +28,11 @@ import {
 } from './matrixContract';
 import { validateExamHtml, hasBlockingIssues, ExamIssue, TRUNCATION_MARKER } from './examValidator';
 import { UserFacingError } from './errors';
+import { normalizeChemText } from './chemFormat';
+import { checkChemistryExam, enforceShortAnswerRounding } from './chemGuardrails';
+import { applyExamHeader, getExamHeaderProfile, splitExamAndKey } from './examLayout';
+import { parseExamForShuffle } from './examShuffle';
+import { TN_THPT_BLUEPRINT } from '../data/chemistryReference';
 export { UserFacingError };
 
 // --- Dual AI Provider & Storage Keys ---
@@ -626,7 +630,7 @@ export const convertMatrixTextToHtml = async (
   const prompt = `
     Bạn là một chuyên gia chuyển đổi dữ liệu.
     Nội dung dưới đây là **MA TRẬN ĐỀ KIỂM TRA** (có thể kèm **BẢN ĐẶC TẢ**) được trích xuất từ file Word.
-    ${hasImages ? `Có ${images!.length} hình ảnh đính kèm (bao gồm công thức toán đã chuyển thành hình). Hãy đọc kỹ các hình để hiểu nội dung.` : ''}
+    ${hasImages ? `Có ${images!.length} hình ảnh đính kèm (bao gồm công thức đã chuyển thành hình). Hãy đọc kỹ các hình để hiểu nội dung.` : ''}
     Nhiệm vụ: dựng lại các bảng thành **HTML Table** chuẩn, giống hệt bản gốc.
     ${MATRIX_CONVERSION_RULES}
     - Nếu text chứa LaTeX ($...$), giữ nguyên LaTeX trong bảng.
@@ -743,7 +747,7 @@ export const extractInfoFromDocument = async (
     **===== NGUYÊN TẮC VÀNG: CHỈ TRÍCH XUẤT, KHÔNG SÁNG TẠO =====**
     1. TUYỆT ĐỐI CHỈ trích xuất nội dung CÓ SẴN trong file đính kèm. KHÔNG ĐƯỢC tự bịa đặt, suy luận, hay thêm bất kỳ thông tin nào không có trong tài liệu.
     2. Tên môn học, tên chương, tên bài học, nội dung yêu cầu cần đạt PHẢI lấy NGUYÊN VĂN từ file gốc.
-    3. KHÔNG ĐƯỢC nhầm lẫn nội dung giữa các môn học. Ví dụ: nếu file là PPCT Tin học thì chỉ được trích xuất nội dung Tin học, KHÔNG ĐƯỢC trả về nội dung của môn Toán, Lý, Hóa hay bất kỳ môn nào khác.
+    3. KHÔNG ĐƯỢC nhầm lẫn nội dung giữa các môn học. Ví dụ: nếu file là PPCT Tin học thì chỉ được trích xuất nội dung Tin học, KHÔNG ĐƯỢC trả về nội dung của bất kỳ môn nào khác.
     4. Nếu không đọc được rõ một phần nào đó trong file, hãy ghi "Không đọc được" thay vì bịa nội dung.
     ${subjectConstraint}
 
@@ -928,7 +932,6 @@ export const extractInfoFromDocument = async (
 export const generateStep1Matrix = async (
   data: InputData,
   selectedLessonIds: Set<string>,
-  template: MatrixTemplate = 'template1'
 ): Promise<string> => {
 
   const selectedChapters: any[] = [];
@@ -948,186 +951,16 @@ export const generateStep1Matrix = async (
     }
   });
 
-  const config = data.questionConfig;
-
-  const totalEssayQuestions = config.essay.biet + config.essay.hieu + config.essay.van_dung + config.essay.van_dung_cao;
-  const isGradeNoEssay = GRADE_NO_ESSAY.includes(data.grade);
-  const hasEssay = totalEssayQuestions > 0; // Tự luận luôn được tính khi người dùng nhập > 0
-  void isGradeNoEssay;
-
-  // Gộp VD + VDC thành 3 mức: Biết, Hiểu, VD (theo chuẩn CV 7991)
-  const type1Total = { biet: config.type1.biet, hieu: config.type1.hieu, vd: config.type1.van_dung + config.type1.van_dung_cao };
-  const type2QuestionsCount = getDungSaiQuestionCount(config);
-  const type2SubItemsTotal = type2QuestionsCount * 4; // Mỗi câu Dạng II gồm 4 ý/lệnh hỏi (a, b, c, d)
-  const type2LevelTotals = getDungSaiLevelTotals(config);
-  const type2Total = { biet: type2LevelTotals.biet, hieu: type2LevelTotals.hieu, vd: type2LevelTotals.van_dung };
-  const type3Total = { biet: config.type3.biet, hieu: config.type3.hieu, vd: config.type3.van_dung + config.type3.van_dung_cao };
-  const essayTotal = { biet: config.essay.biet, hieu: config.essay.hieu, vd: config.essay.van_dung + config.essay.van_dung_cao };
-
-  let scoringInstructions = "";
-
-  if (hasEssay) {
-    scoringInstructions = `
-    **KỊCH BẢN A: CÓ TỰ LUẬN (Tổng 10 điểm)**
-    - Dạng I (TNKQ nhiều lựa chọn): 3.0 điểm. Mỗi câu **0.25 điểm**.
-    - Dạng II (Đúng-Sai): 2.0 điểm. Mỗi câu **1.0 điểm** (4 ý a,b,c,d).
-    - Dạng III (Trả lời ngắn): 2.0 điểm. Mỗi câu **0.5 điểm**.
-    - Tự luận (IV): 3.0 điểm. Mỗi câu tùy độ khó.
-    - **TỈ LỆ %:** Dạng I: 30% | Dạng II: 20% | Dạng III: 20% | Tự luận: 30%
-    - **TỈ LỆ NGANG:** Biết: 40% | Hiểu: 30% | VD: 30%
-    `;
-  } else {
-    scoringInstructions = `
-    **KỊCH BẢN B: KHÔNG TỰ LUẬN (Tổng 10 điểm) — BẮT BUỘC cho Lớp 12**
-    - Dạng I (TNKQ nhiều lựa chọn): 3.0 điểm.
-    - Dạng II (Đúng-Sai): 4.0 điểm. (QUAN TRỌNG: Tăng lên 4.0)
-    - Dạng III (Trả lời ngắn): 3.0 điểm. (QUAN TRỌNG: Tăng lên 3.0)
-    - Tự luận: 0.0 điểm (TUYỆT ĐỐI KHÔNG TẠO).
-    `;
-  }
-
-  const isGiuaKy = data.examType.includes('Giữa');
-  const examTypeLabel = isGiuaKy ? 'GIỮA HỌC KÌ' : 'CUỐI KÌ';
-  const semesterNum = data.examType.includes('1') ? 'I' : 'II';
   const footnotes = getSubjectFootnotes(data.subject);
-
-  const prompt = `
-  Hãy tạo **MA TRẬN ĐỀ KIỂM TRA** (HTML Table) cho môn **${data.subject}**, khối **Lớp ${data.grade}**.
-  
-  **CẤU HÌNH ĐỀ THI:**
-  - Loại đề: ${data.examType} (Kiểm tra ${examTypeLabel} ${semesterNum})
-  - Thời gian: ${data.duration} phút
-  - Tổng số tiết trọng tâm: ${totalSelectedPeriods} tiết
-  
-  **⚠️⚠️⚠️ CẤU TRÚC SỐ LƯỢNG CÂU HỎI — BẢNG BẮT BUỘC (KHÔNG ĐƯỢC SAI DÙ 1 CÂU) ⚠️⚠️⚠️**
-  - **QUY ƯỚC QUAN TRỌNG VỀ DẠNG II (Đúng/Sai):**
-    + Cấu hình đề yêu cầu **${type2QuestionsCount} câu** Dạng II.
-    + Theo quy định chuẩn CV 7991 của Bộ GD&ĐT: Mỗi câu Dạng II gồm **4 lệnh hỏi/ý (a, b, c, d)**.
-    + Tổng số lệnh hỏi/ý Dạng II trong ma trận là **${type2SubItemsTotal} ý** (gồm các mã từ II.1a -> II.${type2QuestionsCount}d).
-    + Các ý a, b, c, d được phân bổ vào các mức độ Biết, Hiểu, VD của các bài học tương ứng (thông thường ý a, b ở Nhận biết, ý c ở Thông hiểu, ý d ở Vận dụng).
-    + ${describeDungSaiLevels(config)}
-  ${MATRIX_FULL_COLUMNS_RULE}
-
-  | Dạng câu hỏi | Số câu | Số lệnh hỏi (ý) | Quy cách chi tiết |
-  |---|---|---|---|
-  | Dạng I (4 lựa chọn) | ${type1Total.biet + type1Total.hieu + type1Total.vd} câu | ${type1Total.biet + type1Total.hieu + type1Total.vd} | 4 phương án A,B,C,D (Biết: ${type1Total.biet}, Hiểu: ${type1Total.hieu}, VD: ${type1Total.vd}) |
-  | Dạng II (Đúng - Sai) | ${type2QuestionsCount} câu | ${type2SubItemsTotal} ý | Mỗi câu gồm 4 ý a,b,c,d (Tổng: ${type2SubItemsTotal} ý/lệnh hỏi phân bổ vào Biết, Hiểu, VD) |
-  | Dạng III (Trả lời ngắn) | ${type3Total.biet + type3Total.hieu + type3Total.vd} câu | ${type3Total.biet + type3Total.hieu + type3Total.vd} | Điền kết quả số (Biết: ${type3Total.biet}, Hiểu: ${type3Total.hieu}, VD: ${type3Total.vd}) |
-  ${hasEssay ? `| Tự luận (IV) | ${essayTotal.biet + essayTotal.hieu + essayTotal.vd} câu | ${essayTotal.biet + essayTotal.hieu + essayTotal.vd} | Tự luận có thang điểm (Biết: ${essayTotal.biet}, Hiểu: ${essayTotal.hieu}, VD: ${essayTotal.vd}) |` : '| Tự luận | 0 câu | 0 | ⛔ TUYỆT ĐỐI KHÔNG TẠO CỘT TỰ LUẬN |'}
-
-  **RÀNG BUỘC NGHIÊM NGẶT:** Tổng số câu/lệnh hỏi ở mỗi dạng trong bảng trên phải KHỚP CHÍNH XÁC trong ma trận output. Nếu sai dù 1 câu → ma trận KHÔNG HỢP LỆ.
-  
-  ${scoringInstructions}
-
-  **===== ĐỊNH DẠNG BẢNG BẮT BUỘC (Theo mẫu chuẩn CV 7991) =====**
-
-  Tiêu đề bảng (in đậm, căn giữa, ở trên bảng):
-  **MA TRẬN ĐỀ KIỂM TRA ${examTypeLabel} ${semesterNum} - LỚP ${data.grade} - MÔN ${data.subject.toUpperCase()} – NĂM HỌC 20... - 20...**
-
-  **QUY TẮC NĂM HỌC (BẮT BUỘC):** Thông tin năm học phải ĐỂ TRỐNG dạng: "NĂM HỌC 20... - 20...". TUYỆT ĐỐI KHÔNG điền sẵn bất kỳ năm cụ thể nào.
-
-  **CẤU TRÚC CỘT QUAN TRỌNG — CHỈ 3 MỨC ĐỘ: Biết | Hiểu | VD**
-  Mỗi dạng câu hỏi CHỈ CÓ 3 cột mức độ: Biết, Hiểu, VD (Vận dụng).
-  KHÔNG tạo cột VDC (Vận dụng cao) riêng. VD bao gồm cả vận dụng và vận dụng cao.
-
-  **HEADER BẢNG (2 dòng):**
-  - Dòng header 1: TT(rowspan=2) | Chương(rowspan=2) | ĐVKT(rowspan=2) | Mức độ đánh giá(colspan=tổng cột dạng) | Tổng(rowspan=2) | Tỉ lệ % điểm(rowspan=2)
-  - Dòng header 2: 
-    + TNKQ nhiều lựa chọn (I): Biết | Hiểu | VD
-    + "Đúng – sai" (II): Biết | Hiểu | VD
-    + Trả lời ngắn (III): Biết | Hiểu | VD
-    ${hasEssay ? '+ Tự luận (IV): Biết | Hiểu | VD' : ''}
-    + Biết | Hiểu | VD (3 cột tổng)
-
-  ${hasEssay ? '' : 'KHÔNG CÓ tự luận => KHÔNG tạo cột Tự luận.'}
-
-  **NỘI DUNG BẢNG — MỖI BÀI HỌC:**
-  Với mỗi bài học:
-  - Ô "Đơn vị kiến thức" ghi: Tên bài
-  - Các ô Biết/Hiểu/VD của từng dạng: Ghi MÃ CÂU (ví dụ: I.1, I.2, II.1a II.1b, III.1, IV.1a)
-  - DẠNG I: mã "I.1", "I.2", "I.3"...
-  - DẠNG II: mã "II.1a II.1b" (ở cột Biết), "II.1c" (ở cột Hiểu), "II.1d" (ở cột VD). Mỗi câu Đ/S có 4 ý a,b,c,d chia vào các mức.
-  - DẠNG III: mã "III.1", "III.2"...
-  - TỰ LUẬN: mã "IV.1a", "IV.1b", "IV.2a IV.2b"...
-  - Ô Tổng: tính TỔNG SỐ CÂU/ý theo hàng (3 cột: Biết, Hiểu, VD)
-
-  **FOOTER BẢNG (3 dòng cuối):**
-  1. **Tổng số câu (Lệnh hỏi):** Tổng cộng theo từng cột Biết/Hiểu/VD + tổng của từng dạng + tổng cuối.
-  2. **Tổng số điểm:** Tổng điểm theo từng cột + tổng cuối = 10.
-  3. **Tỉ lệ %:** ${hasEssay ? '30 | 20 | 20 | 30 | 40 | 30 | 30' : 'Tỉ lệ % theo dạng + 100%'}
-
-  **QUY TẮC ĐIỂM SỐ VÀNG (BẮT BUỘC):**
-  1. Mọi điểm số PHẢI là bội số của 0.25.
-  2. TUYỆT ĐỐI KHÔNG dùng 0.33, 0.42...
-  3. Tổng điểm toàn bảng = 10.
-  4. Nếu số lượng câu hỏi của một Dạng = 0, thì KHÔNG TẠO cột cho dạng đó.
-
-  **DỮ LIỆU ĐẦU VÀO:**
-  ${JSON.stringify(selectedChapters, null, 2)}
-
-  **YÊU CẦU OUTPUT:**
-  1. Xuất ra Full HTML Document (<!DOCTYPE html>...). 
-  2. Tiêu đề bảng (h2, căn giữa, in đậm): "MA TRẬN ĐỀ KIỂM TRA ${examTypeLabel} ${semesterNum} - LỚP ${data.grade} - MÔN ${data.subject.toUpperCase()}"
-  3. Phân bổ câu hỏi theo tỷ lệ số tiết: bài nhiều tiết hơn → nhiều câu hơn.
-  4. **QUAN TRỌNG VỚI DẠNG II (Đúng/Sai):** Mỗi câu có 4 ý (a,b,c,d). Các ý phân bổ vào các mức: ví dụ II.1a II.1b ở Biết, II.1c ở Hiểu, II.1d ở VD.
-  5. Đảm bảo tổng số câu/ý của mỗi dạng khớp chính xác cấu hình.
-  6. **Ghi chú cuối bảng:** "Ghi chú: Các con số trong bảng thể hiện số lượng lệnh hỏi. Mỗi câu hỏi tại phần I và phần III là một lệnh hỏi; mỗi ý hỏi tại Phần II là một lệnh hỏi."
-
-  **Style CSS (Include in <style>):**
-  body { font-family: "Times New Roman", serif; font-size: 13pt; line-height: 1.3; margin: 20px; }
-  h2 { text-align: center; font-weight: bold; text-transform: uppercase; margin-bottom: 15px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
-  th, td { border: 1px solid black; padding: 4px 6px; text-align: center; vertical-align: middle; }
-  th { font-weight: bold; }
-  .left-align { text-align: left; padding-left: 8px; }
-  .bold { font-weight: bold; }
-
-  **CHÚ THÍCH NĂNG LỰC (Cuối bảng):**
-  ${footnotes}
-
-  **⚠️ KIỂM TRA CUỐI CÙNG TRƯỚC KHI TRẢ OUTPUT (BẮT BUỘC):**
-  1. Đếm tổng số mã câu Dạng I (I.1, I.2...) ở cột Biết, Hiểu, VD → phải khớp: Biết=${type1Total.biet}, Hiểu=${type1Total.hieu}, VD=${type1Total.vd} (Tổng = ${type1Total.biet + type1Total.hieu + type1Total.vd} câu)
-  2. Đếm tổng số câu Dạng II: Phải có đủ ${type2QuestionsCount} câu (tương ứng đủ ${type2SubItemsTotal} ý từ II.1a..d đến II.${type2QuestionsCount}a..d) phân bổ trong bảng.
-  3. Đếm tổng số mã câu Dạng III (III.1, III.2...) ở cột Biết, Hiểu, VD → phải khớp: Biết=${type3Total.biet}, Hiểu=${type3Total.hieu}, VD=${type3Total.vd} (Tổng = ${type3Total.biet + type3Total.hieu + type3Total.vd} câu)
-  ${hasEssay ? `4. Đếm tổng số mã câu Tự luận (IV.1a...) ở cột Biết, Hiểu, VD → phải khớp: Biết=${essayTotal.biet}, Hiểu=${essayTotal.hieu}, VD=${essayTotal.vd}` : ''}
-  Nếu bất kỳ số nào KHAI BÁO TRONG BẢNG TRÊN không khớp → SỬA LẠI ma trận cho đúng trước khi trả kết quả.
-  `;
-
-  // --- TEMPLATE 2 or 3: Use custom prompt + template file (parsed as HTML) ---
-  if (template !== 'template1') {
-    const customPrompt = buildMatrixPromptForCustomTemplate(
-      template, data, selectedChapters, totalSelectedPeriods, config
-    );
-    const templateHtml = await fetchTemplateHtml(template);
-
-    // Embed the parsed template HTML directly in the prompt text
-    const fullPrompt = templateHtml
-      ? customPrompt + `\n\n**===== NỘI DUNG FILE MẪU (HTML đã parse từ .docx) =====**\n${templateHtml}`
-      : customPrompt;
-
-    return callWithFallback(async (ai, model) => {
-      const response = await ai.models.generateContent({
-        model,
-        contents: fullPrompt,
-        config: createGeminiConfig({
-          model,
-          systemInstruction: SYSTEM_INSTRUCTION,
-          thinkingLevel: ThinkingLevel.MEDIUM,
-          maxOutputTokens: 16384,
-          temperature: 0.1,
-        }),
-      });
-      const text = response.text || "Lỗi tạo ma trận.";
-      return text.replace(/```html/g, '').replace(/```/g, '');
-    });
+  const cvLayout = computeCv7991Layout(data.questionConfig, true);
+  if (cvLayout.types.length === 0) {
+    throw new UserFacingError('Cấu hình chưa có câu hỏi nào. Vui lòng chọn loại đề hoặc nhập số câu.');
   }
-
-  // --- TEMPLATE 1: Mẫu chuẩn CV 7991 (đúng Phụ lục CV 7991/BGDĐT-GDTrH) ---
-  const cvLayout = computeCv7991Layout(config, true);
-  const useCv = cvLayout.types.length > 0;
-  const cvPrompt = useCv
-    ? buildCv7991MatrixPrompt({ data, layout: cvLayout, footnotes, selectedChapters, totalSelectedPeriods })
-    : prompt;
+  // Đề ôn thi tốt nghiệp trải trên cả 3 khối: phân bổ theo khuôn mẫu đề thật, không theo số tiết
+  const blueprintNote = isGraduationExam(data)
+    ? `\n${TN_THPT_BLUEPRINT}\n  **QUY ĐỊNH RIÊNG CHO ĐỀ NÀY:** Dữ liệu đầu vào gồm cả 3 khối nên KHÔNG phân bổ theo số tiết mà theo tỉ trọng ở khuôn mẫu trên. Chỉ giữ lại các bài thực sự có lệnh hỏi; bài không có lệnh hỏi thì KHÔNG đưa vào bảng.\n`
+    : '';
+  const cvPrompt = buildCv7991MatrixPrompt({ data, layout: cvLayout, footnotes, selectedChapters, totalSelectedPeriods }) + blueprintNote;
   return callWithFallback(async (ai, model) => {
     const response = await ai.models.generateContent({
       model,
@@ -1141,14 +974,11 @@ export const generateStep1Matrix = async (
       }),
     });
     const text = (response.text || "Lỗi tạo ma trận.").replace(/```html/g, '').replace(/```/g, '');
-    return useCv
-      ? applyCv7991Thead(text, buildCv7991MatrixThead(cvLayout), cv7991MatrixColumnCount(cvLayout))
-      : text;
+    return normalizeChemText(applyCv7991Thead(text, buildCv7991MatrixThead(cvLayout), cv7991MatrixColumnCount(cvLayout)));
   });
 };
 
-
-
+const isGraduationExam = (data: InputData) => /tốt\s*nghiệp/i.test(data.examType);
 
 const CV7991_CSS_INLINE = 'body { font-family: "Times New Roman", serif; font-size: 13pt; margin: 20px; } h2 { text-align: center; font-weight: bold; text-transform: uppercase; } table { width: 100%; border-collapse: collapse; } th, td { border: 1px solid black; padding: 3px 5px; text-align: center; vertical-align: middle; } .left-align { text-align: left; vertical-align: top; } .bold { font-weight: bold; }';
 
@@ -1231,134 +1061,26 @@ export const generateStep2Specs = async (
   matrixContent: string,
   data: InputData,
   selectedLessonIds: Set<string>,
-  template: MatrixTemplate = 'template1',
   isUploadedMatrix: boolean = false
 ): Promise<string> => {
-  // Ma trận do người dùng tải lên → đặc tả theo đúng cấu trúc của ma trận đó (bỏ qua mẫu/thang điểm mặc định)
+  // Ma trận do người dùng tải lên → đặc tả theo đúng cấu trúc của ma trận đó (bỏ qua thang điểm mặc định)
   if (isUploadedMatrix && matrixContent && /<table/i.test(matrixContent)) {
-    return generateSpecsFromUploadedMatrix(matrixContent, data, selectedLessonIds);
+    return normalizeChemText(await generateSpecsFromUploadedMatrix(matrixContent, data, selectedLessonIds));
   }
 
   const objectivesMap: string[] = [];
   data.chapters.forEach(c => (c.lessons || []).forEach(l => {
     if (selectedLessonIds.has(l.id)) {
-      objectivesMap.push(`- Bài "${l.name}": \n   + Biết: ${l.objectives?.biet || '...'}\n   + Hiểu: ${l.objectives?.hieu || '...'}\n   + Vận dụng: ${l.objectives?.van_dung || '...'}\n   + Vận dụng cao: ${l.objectives?.van_dung_cao || '...'}`);
+      objectivesMap.push(`- Bài "${l.name}": \n   + Biết: ${l.objectives?.biet || '...'}\n   + Hiểu: ${l.objectives?.hieu || '...'}\n   + Vận dụng: ${l.objectives?.van_dung || '...'}`);
     }
   }));
 
-  const config = data.questionConfig;
-  const totalEssayQuestions = config.essay.biet + config.essay.hieu + config.essay.van_dung + config.essay.van_dung_cao;
-  const isGradeNoEssay = GRADE_NO_ESSAY.includes(data.grade);
-  const allowEssay = totalEssayQuestions > 0; void isGradeNoEssay;
-  const hasEssay = allowEssay && totalEssayQuestions > 0;
-
-  const type1Total = { biet: config.type1.biet, hieu: config.type1.hieu, vd: config.type1.van_dung + config.type1.van_dung_cao };
-  const type2QuestionsCount = getDungSaiQuestionCount(config);
-  const type2SubItemsTotal = type2QuestionsCount * 4; // Mỗi câu Dạng II gồm 4 ý/lệnh hỏi (a, b, c, d)
-  const type3Total = { biet: config.type3.biet, hieu: config.type3.hieu, vd: config.type3.van_dung + config.type3.van_dung_cao };
-  const essayTotal = { biet: config.essay.biet, hieu: config.essay.hieu, vd: config.essay.van_dung + config.essay.van_dung_cao };
-
-  const isGiuaKy = data.examType.includes('Giữa');
-  const examTypeLabel = isGiuaKy ? 'GIỮA HỌC KÌ' : 'CUỐI KÌ';
-  const semesterNum = data.examType.includes('1') ? 'I' : 'II';
   const footnotes = getSubjectFootnotes(data.subject);
-
-  const prompt = `
-  Dựa trên **Ma trận đề kiểm tra** (HTML) đã có, hãy tạo **BẢNG ĐẶC TẢ ĐỀ KIỂM TRA** (Full HTML Document).
-  Phân tích HTML ma trận để lấy chính xác toàn bộ Chủ đề/Chương, Nội dung/đơn vị kiến thức, số lượng câu hỏi, mã câu, điểm số và cấu trúc cột.
-
-  **MA TRẬN ĐẦU VÀO (NGUỒN CHUẨN DUY NHẤT - BẮT BUỘC KHỚP 100%):**
-  ${matrixContent}
-
-  **DỮ LIỆU YÊU CẦU CẦN ĐẠT THAM KHẢO:**
-  ${objectivesMap.length ? objectivesMap.join('\n') : '(Tự suy luận Yêu cầu cần đạt chuẩn GDPT 2018 cho từng Nội dung/Đơn vị kiến thức có trong Ma trận đầu vào)'}
-
-  **===== BẢNG SỐ LƯỢNG TỔNG HỢP TỪ MA TRẬN =====**
-  - **QUY ƯỚC DẠNG II (Đúng/Sai):**
-    + Gồm **${type2QuestionsCount} câu** Đúng/Sai. Mỗi câu gồm **4 ý lệnh hỏi (a, b, c, d)**.
-    + Tổng số ý Dạng II cần đặc tả là **${type2SubItemsTotal} ý** (tương ứng các mã từ II.1a -> II.${type2QuestionsCount}d).
-    + Mỗi dòng đặc tả (NB, TH, VD) gắn với các ý tương ứng theo đúng ô của Ma trận đầu vào.
-    + ${describeDungSaiLevels(config)}
-  ${MATRIX_FULL_COLUMNS_RULE}
-
-  | Dạng câu hỏi | Số câu | Số lệnh hỏi (ý) | Quy cách |
-  |---|---|---|---|
-  | Dạng I (4 lựa chọn) | ${type1Total.biet + type1Total.hieu + type1Total.vd} câu | ${type1Total.biet + type1Total.hieu + type1Total.vd} | Biết: ${type1Total.biet}, Hiểu: ${type1Total.hieu}, VD: ${type1Total.vd} |
-  | Dạng II (Đúng - Sai) | ${type2QuestionsCount} câu | ${type2SubItemsTotal} ý | Mỗi câu gồm 4 ý a,b,c,d. Tổng: ${type2SubItemsTotal} ý phân bổ vào các mức |
-  | Dạng III (Trả lời ngắn) | ${type3Total.biet + type3Total.hieu + type3Total.vd} câu | ${type3Total.biet + type3Total.hieu + type3Total.vd} | Biết: ${type3Total.biet}, Hiểu: ${type3Total.hieu}, VD: ${type3Total.vd} |
-  ${hasEssay ? `| Tự luận (IV) | ${essayTotal.biet + essayTotal.hieu + essayTotal.vd} câu | ${essayTotal.biet + essayTotal.hieu + essayTotal.vd} | Biết: ${essayTotal.biet}, Hiểu: ${essayTotal.hieu}, VD: ${essayTotal.vd} |` : '| Tự luận | 0 câu | 0 | ⛔ TUYỆT ĐỐI KHÔNG TẠO CỘT TỰ LUẬN |'}
-
-  **===== ĐỊNH DẠNG BẢNG ĐẶC TẢ BẮT BUỘC (Tuân thủ 100%) =====**
-
-  Tiêu đề bảng (in đậm, căn giữa, ở trên bảng):
-   **ĐẶC TẢ ĐỀ KIỂM TRA ${examTypeLabel} ${semesterNum} - LỚP ${data.grade} - MÔN ${data.subject.toUpperCase()} - NĂM HỌC 20... - 20...**
-
-  **QUY TẮC NĂM HỌC (BẮT BUỘC):** Thông tin năm học phải ĐỂ TRỐNG dạng: "NĂM HỌC 20... - 20...". TUYỆT ĐỐI KHÔNG điền sẵn bất kỳ năm cụ thể nào.
-
-  **HEADER BẢNG:**
-  CẤU TRÚC CỘT PHẢI **KHỚP 100%** với Ma trận đầu vào. Nếu Ma trận không có Tự luận thì Đặc tả cũng không có.
-
-  **NỘI DUNG BẢNG (Quan trọng nhất):**
-  Giữ nguyên 100% danh sách Chương/chủ đề và Nội dung/Đơn vị kiến thức từ Ma trận đầu vào (không tự ý thêm/bớt hay đổi tên bài học):
-  - Ô "TT" và "Chương/chủ đề": Merge theo chương (rowspan)
-  - Ô "Nội dung/ĐVKT": Tên bài (khớp y hệt Ma trận)
-  - Ô "Yêu cầu cần đạt": Nội dung CHI TIẾT yêu cầu cần đạt ở từng mức độ (Nhận biết, Thông hiểu, Vận dụng). Text-align: left.
-  - Các ô số lượng/mã câu: Ghi số lượng hoặc mã câu tương ứng - PHẢI KHỚP 100% ở từng hàng và từng cột với Ma trận đầu vào!
-
-  **QUAN TRỌNG:**
-  - Cột "Yêu cầu cần đạt" phải đủ rộng, text-align: left, chứa nội dung chi tiết
-  - Số câu hỏi, mã câu và vị trí từng ô PHẢI khớp 100% với **MA TRẬN ĐẦU VÀO** ở trên.
-  - Nếu Ma trận không có cột Tự luận thì Đặc tả cũng KHÔNG có.
-
-  **QUY TẮC CHÚ THÍCH (FOOTNOTES) - BẮT BUỘC:**
-  Cuối bảng thêm:
-  ${footnotes}
-
-  **Style CSS:**
-  body { font-family: "Times New Roman", serif; font-size: 13pt; margin: 20px; }
-  h2 { text-align: center; font-weight: bold; text-transform: uppercase; margin-bottom: 15px; }
-  table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-  th, td { border: 1px solid black; padding: 4px 6px; text-align: center; vertical-align: middle; }
-  th { font-weight: bold; }
-  .left-align, .text-left { text-align: left; padding: 6px 8px; vertical-align: top; }
-  .bold { font-weight: bold; }
-  `;
-
-  // --- TEMPLATE 2, 3 or 4: Use custom prompt + template file (parsed as HTML) ---
-  if (template !== 'template1') {
-    const customPrompt = buildSpecsPromptForCustomTemplate(
-      template, matrixContent, data, selectedLessonIds, config, isUploadedMatrix
-    );
-    const templateHtml = await fetchTemplateHtml(template);
-
-    // Embed the parsed template HTML directly in the prompt text
-    const fullPrompt = templateHtml
-      ? customPrompt + `\n\n**===== NỘI DUNG FILE MẪU (HTML đã parse từ .docx) =====**\n${templateHtml}`
-      : customPrompt;
-
-    return callWithFallback(async (ai, model) => {
-      const response = await ai.models.generateContent({
-        model,
-        contents: fullPrompt,
-        config: createGeminiConfig({
-          model,
-          systemInstruction: SYSTEM_INSTRUCTION,
-          thinkingLevel: ThinkingLevel.MEDIUM,
-          maxOutputTokens: 16384,
-          temperature: 0.1,
-        }),
-      });
-      const text = response.text || "Lỗi tạo đặc tả.";
-      return text.replace(/```html/g, '').replace(/```/g, '');
-    });
+  const cvLayout = computeCv7991Layout(data.questionConfig, true);
+  if (cvLayout.types.length === 0) {
+    throw new UserFacingError('Cấu hình chưa có câu hỏi nào. Vui lòng chọn loại đề hoặc nhập số câu.');
   }
-
-  // --- TEMPLATE 1: Mẫu chuẩn CV 7991 (đúng Phụ lục CV 7991/BGDĐT-GDTrH) ---
-  const cvLayout = computeCv7991Layout(config, allowEssay);
-  const useCv = cvLayout.types.length > 0;
-  const cvPrompt = useCv
-    ? buildCv7991SpecsPrompt({ data, layout: cvLayout, footnotes, matrixContent, objectivesMap, isUploadedMatrix })
-    : prompt;
+  const cvPrompt = buildCv7991SpecsPrompt({ data, layout: cvLayout, footnotes, matrixContent, objectivesMap, isUploadedMatrix });
   return callWithFallback(async (ai, model) => {
     const response = await ai.models.generateContent({
       model,
@@ -1372,9 +1094,7 @@ export const generateStep2Specs = async (
       }),
     });
     const text = (response.text || "Lỗi tạo đặc tả.").replace(/```html/g, '').replace(/```/g, '');
-    return useCv
-      ? applyCv7991Thead(text, buildCv7991SpecsThead(cvLayout), cv7991SpecsColumnCount(cvLayout))
-      : text;
+    return normalizeChemText(applyCv7991Thead(text, buildCv7991SpecsThead(cvLayout), cv7991SpecsColumnCount(cvLayout)));
   });
 };
 
@@ -1401,10 +1121,10 @@ export const extractQuestionsFromReference = async (
 
   const prompt = `
   Trích xuất nhanh danh sách câu hỏi từ tài liệu môn ${subject || 'THPT'} lớp ${grade || ''}.
-  ${hasImages ? `Có ${images.length} tệp/hình đính kèm, hãy chuyển công thức trong hình sang LaTeX $...$.` : ''}
+  ${hasImages ? `Có ${images.length} tệp/hình đính kèm, hãy chép công thức trong hình bằng thẻ <sub>, <sup>.` : ''}
 
   QUY TẮC:
-  1. Giữ nguyên văn câu hỏi và công thức LaTeX $...$.
+  1. Giữ nguyên văn câu hỏi; công thức hóa học viết bằng thẻ <sub>, <sup>.
   2. Phân loại:
      - "type": "type1" (4 lựa chọn A,B,C,D), "type2" (Đúng/Sai a,b,c,d), "type3" (Trả lời ngắn), "essay" (Tự luận)
      - "level": "biet" | "hieu" | "van_dung" | "van_dung_cao"
@@ -1605,6 +1325,11 @@ const generateStep3ExamRaw = async (
     structureInstructions += `\n**⚠️ GIỚI HẠN ĐỘ DÀI:** Lần trước đề bị cắt cụt vì quá dài. Lần này viết lời giải/hướng dẫn chấm NGẮN GỌN (chỉ các bước chính), KHÔNG lặp lại đề bài trong phần đáp án — nhưng vẫn phải ĐỦ tất cả câu và đủ đáp án.\n`;
   }
 
+  if (!isUploadedMatrix) {
+    const scoreLine = computeCv7991Layout(questionConfig, true).types
+      .map(t => `Phần ${t.roman}: ${fmtNum(t.points)} điểm`).join('; ');
+    structureInstructions += `\n**THANG ĐIỂM BẮT BUỘC:** ${scoreLine}. Phần II chấm lũy tiến theo số ý đúng của mỗi câu: 1 ý 10%, 2 ý 25%, 3 ý 50%, 4 ý 100% số điểm của câu. Ghi rõ điểm ở tiêu đề khu vực đáp án của từng phần.\n`;
+  }
   structureInstructions += `\n**⚠️ DANH SÁCH PHẦN ĐƯỢC PHÉP TẠO (WHITELIST):** ${allowedParts.length > 0 ? allowedParts.join(', ') : 'Theo đúng các phần có trong Ma trận & Bảng đặc tả'}.\n`;
   structureInstructions += `**⛔ NGHIÊM CẤM:** Bất kỳ phần nào KHÔNG có trong Ma trận/Bảng đặc tả và whitelist trên đều KHÔNG ĐƯỢC TẠO.\n`;
   structureInstructions += `**🎯 BẮT BUỘC TUÂN THỦ MA TRẬN & ĐẶC TẢ:** Từng câu hỏi (Câu 1, Câu 2...) ở mỗi phần PHẢI khớp chính xác với **Đơn vị kiến thức/Bài học**, **Mức độ tư duy (Nhận biết / Thông hiểu / Vận dụng)** và **Yêu cầu cần đạt** tại đúng dòng/cột tương ứng trong Ma trận và Bảng đặc tả!\n`;
@@ -1650,10 +1375,10 @@ const generateStep3ExamRaw = async (
   Phân bổ: Dạng I: ${questionsByType.type1.length}, Dạng II: ${questionsByType.type2.length}, Dạng III: ${questionsByType.type3.length}, Tự luận: ${questionsByType.essay.length}
   
   **CÁCH SỬ DỤNG NGÂN HÀNG CÂU HỎI MẪU (BẮT BUỘC TUÂN THỦ):**
-  1. **THAM KHẢO DẠNG CÂU HỎI:** Chọn các câu hỏi mẫu bên dưới có dạng toán/dạng bài phù hợp với từng yêu cầu trong Ma trận và Bảng đặc tả (đúng dạng câu hỏi, đúng mức độ Nhận biết / Thông hiểu / Vận dụng, đúng chủ đề).
+  1. **THAM KHẢO DẠNG CÂU HỎI:** Chọn các câu hỏi mẫu bên dưới có dạng bài phù hợp với từng yêu cầu trong Ma trận và Bảng đặc tả (đúng dạng câu hỏi, đúng mức độ Nhận biết / Thông hiểu / Vận dụng, đúng chủ đề).
   2. **THAY SỐ LIỆU HOẶC BỐI CẢNH CHO PHÙ HỢP:**
      - TUYỆT ĐỐI KHÔNG chép nguyên xi số liệu của câu hỏi gốc.
-     - Hãy **thay đổi số liệu, hệ số, hàm số, biểu thức toán học hoặc bối cảnh thực tế** dựa trên cấu trúc/dạng của câu hỏi mẫu để tạo thành câu hỏi mới tương đương về mức độ tư duy và phù hợp chặt chẽ với Bảng đặc tả.
+     - Hãy **thay đổi số liệu, chất tham gia, quy trình hoặc bối cảnh thực tế** dựa trên cấu trúc/dạng của câu hỏi mẫu để tạo thành câu hỏi mới tương đương về mức độ tư duy và phù hợp chặt chẽ với Bảng đặc tả.
      - Tính toán lại chính xác **các phương án A, B, C, D, các mệnh đề Đúng/Sai a), b), c), d), đáp án trả lời ngắn và lời giải chi tiết** theo số liệu/bối cảnh mới.
   3. Nếu ngân hàng mẫu chưa có câu hỏi cho một nội dung nào đó trong Bảng đặc tả → tự biên soạn câu hỏi mới bám sát Bảng đặc tả theo phong cách tương tự.
   4. Sắp xếp lại số thứ tự câu hỏi (Câu 1, Câu 2...) cho liên tục.
@@ -1674,7 +1399,7 @@ const generateStep3ExamRaw = async (
   1. ƯU TIÊN SỐ 1: Sử dụng CHÍNH XÁC NGUYÊN VĂN các câu hỏi từ ngân hàng bên dưới.
   2. Chọn câu hỏi PHÙ HỢP với Ma trận và Đặc tả (đúng dạng, đúng mức độ, đúng chủ đề).
   3. KHÔNG ĐƯỢC thay đổi nội dung, số liệu, hay cách diễn đạt của câu hỏi gốc.
-  4. Giữ nguyên công thức toán LaTeX $...$ hoặc $$...$$ như trong ngân hàng.
+  4. Giữ nguyên công thức hóa học như trong ngân hàng, viết lại bằng thẻ <sub>, <sup>.
   5. Nếu ngân hàng KHÔNG ĐỦ câu hỏi cho một dạng/mức độ nào đó → BỔ SUNG thêm câu hỏi MỚI theo phong cách tương tự.
   6. Sắp xếp lại số thứ tự câu hỏi (Câu 1, Câu 2...) cho liên tục.
   
@@ -1691,13 +1416,13 @@ const generateStep3ExamRaw = async (
       referenceSection = `
   **===== TÀI LIỆU THAM KHẢO — CHẾ ĐỘ: THAM KHẢO DẠNG CÂU HỎI, THAY SỐ HOẶC BỐI CẢNH =====**
   
-  Dưới đây là nội dung tài liệu tham khảo được người dùng tải lên. ${hasImages ? `Có ${referenceImages!.length} tệp/hình ảnh đính kèm (bao gồm PDF hoặc công thức toán).` : ''}
+  Dưới đây là nội dung tài liệu tham khảo được người dùng tải lên. ${hasImages ? `Có ${referenceImages!.length} tệp/hình ảnh đính kèm (bao gồm PDF hoặc công thức).` : ''}
   
   **CÁCH SỬ DỤNG TÀI LIỆU THAM KHẢO:**
-  - Tham khảo cấu trúc, dạng câu hỏi, dạng bài toán trong tài liệu tham khảo phù hợp với Ma trận và Bảng đặc tả.
-  - **THAY SỐ HOẶC BỐI CẢNH CHO PHÙ HỢP:** Không chép y nguyên câu hỏi gốc; hãy thay đổi số liệu, hàm số, dữ kiện hoặc bối cảnh thực tế và tính toán lại đáp án, lời giải chi tiết thật chính xác.
+  - Tham khảo cấu trúc, dạng câu hỏi, dạng bài trong tài liệu tham khảo phù hợp với Ma trận và Bảng đặc tả.
+  - **THAY SỐ HOẶC BỐI CẢNH CHO PHÙ HỢP:** Không chép y nguyên câu hỏi gốc; hãy thay đổi số liệu, chất, dữ kiện hoặc bối cảnh thực tế và tính toán lại đáp án, lời giải chi tiết thật chính xác.
   - Bổ sung câu hỏi mới nếu tài liệu tham khảo chưa có đủ dạng bài cho một mục trong Bảng đặc tả.
-  ${hasImages ? '- Đọc KỸ các tệp/hình ảnh đính kèm — chuyển đổi mọi công thức sang LaTeX chuẩn $...$.' : ''}
+  ${hasImages ? '- Đọc KỸ các tệp/hình ảnh đính kèm — chép lại mọi công thức hóa học bằng thẻ <sub>, <sup>.' : ''}
   
   **NỘI DUNG TÀI LIỆU THAM KHẢO:**
   ${safeText.substring(0, 15000)}
@@ -1709,13 +1434,13 @@ const generateStep3ExamRaw = async (
       referenceSection = `
   **===== TÀI LIỆU THAM KHẢO (ĐỀ MẪU / NGÂN HÀNG CÂU HỎI) — CHẾ ĐỘ: TRÍCH XUẤT CHÍNH XÁC =====**
   
-  Dưới đây là nội dung tài liệu tham khảo được người dùng tải lên. ${hasImages ? `Có ${referenceImages!.length} tệp/hình ảnh đính kèm (bao gồm PDF hoặc công thức toán).` : ''}
+  Dưới đây là nội dung tài liệu tham khảo được người dùng tải lên. ${hasImages ? `Có ${referenceImages!.length} tệp/hình ảnh đính kèm (bao gồm PDF hoặc công thức).` : ''}
   
   **CÁCH SỬ DỤNG TÀI LIỆU THAM KHẢO:**
   - Sử dụng CHÍNH XÁC NGUYÊN VĂN các câu hỏi có sẵn trong tài liệu tham khảo nếu phù hợp với ma trận, đặc tả.
   - Ưu tiên lấy nguyên văn câu hỏi thay vì tạo mới.
   - Chỉ tạo câu hỏi MỚI khi tài liệu tham khảo không đủ câu cho một dạng/mức độ cụ thể.
-  ${hasImages ? '- Đọc KỸ các tệp/hình ảnh đính kèm — đặc biệt là hình công thức toán. Chuyển đổi nội dung hình sang LaTeX khi cần.' : ''}
+  ${hasImages ? '- Đọc KỸ các tệp/hình ảnh đính kèm — đặc biệt là hình công thức, hình thí nghiệm. Chép lại công thức bằng thẻ <sub>, <sup>; hình cần giữ thì dùng thẻ figure-json.' : ''}
   
   **NỘI DUNG TÀI LIỆU THAM KHẢO:**
   ${safeText.substring(0, 15000)}
@@ -1764,79 +1489,34 @@ const generateStep3ExamRaw = async (
      - .answer-table th { font-weight: bold; background-color: #f2f2f2; text-align: center; }
      - .answer-table td.center { text-align: center; }
      - .answer-table td.left { text-align: left; }
-     /* CSS BẢNG BIẾN THIÊN CHUẨN SGK (GIỐNG WORD/LATEX - KHÔNG ĐƯỜNG KẺ DỌC NỘI BỘ) */
-     - .bbt-table { 
-         border-collapse: collapse; 
-         margin: 15px auto; 
-         font-family: "Times New Roman", serif; 
-         font-size: 13pt; 
-         border: 1px solid #000; 
-         min-width: 420px; 
-       }
-     - .bbt-table td { 
-         padding: 5px 8px; 
-         text-align: center; 
-         vertical-align: middle; 
-         border: none; /* QUAN TRỌNG: Mặc định KHÔNG kẻ ô */
-       }
-     - .bbt-table .label-col { 
-         font-weight: bold; 
-         font-style: italic; 
-         border-right: 1px solid #000; 
-         width: 50px; 
-         text-align: center; 
-       }
-     - .bbt-table .row-border { 
-         border-bottom: 1px solid #000; 
-       }
-
-  **===== QUY TẮC BẢNG BIẾN THIÊN CHUẨN SÁCH GIÁO KHOA (TỰ ĐỘNG TẠO ẢNH & DÁN VÀO CÂU HỎI) =====**
-  
-  Khi câu hỏi hoặc lời giải có **Bảng biến thiên**, TUYỆT ĐỐI KHÔNG tự kẻ bảng HTML thủ công bằng ký tự mũi tên rời rạc.
-  Thay vào đó, **BẮT BUỘC** nhúng thẻ \`<script type="application/json" class="figure-json">...</script>\` ngay tại vị trí cần hiển thị bảng biến thiên trong câu hỏi (ngay dưới câu dẫn, trước các phương án A, B, C, D). Hệ thống sẽ tự động tính toán, vẽ thành **ảnh Bảng biến thiên chuẩn SGK 300 DPI** (kiểu \`tkz-tab\` LaTeX) và dán trực tiếp vào câu hỏi tương ứng!
-  
-  1. **Trường hợp 1 — Biết công thức hàm số cụ thể (ví dụ $y = x^3 - 3x$, $y = -x^4 + 2x^2 + 3$, $y = \\frac{2x+1}{x-1}$):**
-     Chỉ cần khai báo trường \`"fn"\`, hệ thống sẽ tự tính đạo hàm, nghiệm, cực trị, giới hạn, vạch đôi không xác định và vẽ ảnh:
-     <script type="application/json" class="figure-json">
-     {"type": "bbt", "fn": "x^3 - 3*x"}
-     </script>
-     
-  2. **Trường hợp 2 — Câu hỏi cho bảng biến thiên của hàm $y = f(x)$ tổng quát (không cho công thức $f(x)$):**
-     Khai báo trực tiếp các mốc \`"xs"\`, dấu đạo hàm \`"signs"\` (dùng \`"||"\` tại điểm không xác định), và giá trị \`"ys"\`:
-     <script type="application/json" class="figure-json">
-     {"type": "bbt", "xs": ["-\\infty", "-1", "1", "+\\infty"], "signs": ["+", "0", "-", "0", "+"], "ys": [["-\\infty", "bottom"], ["2", "top"], ["-2", "bottom"], ["+\\infty", "top"]]}
-     </script>
-     *(Nếu tại mốc có tiệm cận đứng / không xác định \`"||"\`, khai báo phần tử \`ys\` tại mốc đó là \`{"pole": true, "left": {"level": "bottom", "label": "-\\infty"}, "right": {"level": "top", "label": "+\\infty"}}\`).*
 
   **QUY TẮC FORMAT NGHIÊM NGẶT ĐỂ XUẤT WORD:**
   
-  1. **HEADER:** Sau tiêu đề ĐỀ THI, phải có thông tin: Thời gian, Họ tên, SBD...
-    - Tiêu đề phải ghi rõ: "ĐỀ KIỂM TRA ${inputData.examType.toUpperCase()} - MÔN ${inputData.subject.toUpperCase()} ${inputData.grade.toUpperCase()}"
-    **QUY TẮC NĂM HỌC (BẮT BUỘC):** Thông tin năm học phải ĐỂ TRỐNG dạng: "NĂM HỌC 20... - 20...". TUYỆT ĐỐI KHÔNG điền sẵn bất kỳ năm cụ thể nào (ví dụ KHÔNG viết 2023-2024 hay 2024-2025). Tương tự, tên trường để dạng "TRƯỜNG THPT ...............".
-  2. **PHẦN:** Sau tiêu đề mỗi PHẦN (PHẦN I, PHẦN II...), nội dung bắt đầu ở dòng tiếp theo.
+  1. **KHÔNG VIẾT PHẦN ĐẦU ĐỀ:** Không viết tên Sở, tên trường, tiêu đề đề thi, họ tên, số báo danh, mã đề, dòng nguyên tử khối và dòng kí hiệu (app tự chèn đúng mẫu của giáo viên). Nội dung trong <body> bắt đầu THẲNG bằng tiêu đề "PHẦN I." (hoặc phần đầu tiên có trong whitelist). Kết thúc phần câu hỏi bằng dòng <p style="text-align:center;font-weight:bold;">--- HẾT ---</p>, sau đó mới đến phần ĐÁP ÁN VÀ HƯỚNG DẪN GIẢI.
+  2. **PHẦN:** Mỗi phần có tiêu đề in đậm kèm lệnh chung, ví dụ "PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn. Thí sinh trả lời từ câu 1 đến câu 18. Mỗi câu hỏi thí sinh chỉ chọn một phương án." Mỗi phần đánh số lại từ Câu 1. Tiêu đề khu vực đáp án ghi đúng "ĐÁP ÁN VÀ HƯỚNG DẪN GIẢI".
   3. **CÂU HỎI TRẮC NGHIỆM:**
      - Sử dụng thẻ <p> cho mỗi câu hỏi.
      - Bắt đầu: <span class="question-number">Câu X.</span> Nội dung...
      - Các đáp án A, B, C, D phải được ngắt dòng rõ ràng (dùng <br> hoặc <div class="option-item">).
      - **VÍ DỤ:**
-       <p><span class="question-number">Câu 1.</span> Thủ đô của Việt Nam là?</p>
+       <p><span class="question-number">Câu 1.</span> Công thức hóa học của chromium(III) sulfate là</p>
        <div class="options">
-         <div class="option-item">A. Hà Nội</div>
-         <div class="option-item">B. Huế</div>
-         <div class="option-item">C. Đà Nẵng</div>
-         <div class="option-item">D. TP.HCM</div>
+         <div class="option-item">A. CrSO<sub>4</sub>.</div>
+         <div class="option-item">B. Cr<sub>2</sub>(SO<sub>4</sub>)<sub>3</sub>.</div>
+         <div class="option-item">C. K<sub>2</sub>Cr<sub>2</sub>O<sub>7</sub>.</div>
+         <div class="option-item">D. Cr<sub>2</sub>S<sub>3</sub>.</div>
        </div>
        <br> <!-- Dòng trống giữa các câu -->
 
   4. **LOGIC DẠNG II (Đúng/Sai):**
      - Nếu Bảng đặc tả ghi **C13a,b** (hoặc **II.1a, II.1b**) ở Biết và **C13c** ở Hiểu, **C13d** ở VD, hãy gộp thành **MỘT CÂU DUY NHẤT** có đề dẫn chung và đủ **4 ý lệnh hỏi a), b), c), d)**.
      - Ví dụ:
-       <p><span class="question-number">Câu 1.</span> Cho hàm số $y = f(x)$... Xét tính đúng sai của các mệnh đề sau:</p>
+       <p><span class="question-number">Câu 1.</span> Thủy phân chất béo X bằng dung dịch NaOH đun nóng... Mỗi phát biểu sau đúng hay sai?</p>
        <div class="options">
-         <div class="option-item">a) Hàm số đồng biến...</div>
-         <div class="option-item">b) Đồ thị đi qua...</div>
-         <div class="option-item">c) Giá trị lớn nhất...</div>
-         <div class="option-item">d) Phương trình...</div>
+         <div class="option-item">a) Hợp chất Y có tên gọi là glycerol.</div>
+         <div class="option-item">b) Phổ IR của X có tín hiệu đặc trưng của liên kết C=O.</div>
+         <div class="option-item">c) Hydrogen hóa hoàn toàn X thu được chất béo no.</div>
+         <div class="option-item">d) Muối thu được có phần ưa nước và phần kị nước.</div>
        </div>
 
   5. **ĐÁP ÁN VÀ HƯỚNG DẪN CHẤM (ĐẶC BIỆT CHÚ Ý KHI XUẤT RA FILE WORD):**
@@ -1912,18 +1592,13 @@ const generateStep3ExamRaw = async (
 
   **NGUYÊN TẮC CHUNG (BẮT BUỘC TUÂN THỦ):**
   1. **⛔ CẤM TẠO PHẦN THỪA (QUAN TRỌNG NHẤT):** Đề thi CHỈ ĐƯỢC CHỨA các phần có trong WHITELIST ở trên: [${allowedParts.join(', ')}].${contract?.sections ? '' : ' Nếu PHẦN IV (Tự luận) KHÔNG có trong whitelist → TUYỆT ĐỐI KHÔNG tạo câu tự luận, không tạo tiêu đề "PHẦN IV", không nhắc đến tự luận.'}
-  2. **CÔNG THỨC TOÁN (BẮT BUỘC — vì đề sẽ được chuyển sang MathType trong Word):**
-     - MỌI công thức và ký hiệu toán/lý/hoá PHẢI viết bằng LaTeX, bọc trong dấu $ ... $ (công thức trong dòng) hoặc $$ ... $$ (công thức đứng riêng một dòng).
-     - TUYỆT ĐỐI KHÔNG dùng ký tự Unicode để thay cho công thức: không viết x², √x, ≤, ≥, ≠, ≈, π, a⁻¹, ½... Thay vào đó viết $x^2$, $\\sqrt{x}$, $\\le$, $\\ge$, $\\ne$, $\\approx$, $\\pi$, $a^{-1}$, $\\frac{1}{2}$.
-     - QUY TẮC RANH GIỚI (chống dính chữ): công thức trong dòng $ ... $ PHẢI có đúng một dấu cách trước và sau dấu $. ĐÚNG: "Cho tam giác đều $ABC$ có cạnh $a$." SAI: "$ABC$.a)" hoặc "cạnh$a$".
-     - Công thức $$ ... $$ PHẢI đứng trên dòng riêng: trước và sau nó luôn xuống dòng, KHÔNG nằm chung một đoạn văn với câu chữ.
-     - KHÔNG đặt công thức trong khối code (code fence), KHÔNG thêm ký tự lạ quanh dấu $, KHÔNG được bỏ hoặc đổi dấu $.
-     - Kết thúc: tự kiểm tra; nếu còn ký tự Unicode thay công thức hoặc còn công thức dính liền chữ thì sửa lại trước khi trả kết quả.
+${CHEM_EXAM_RULES}
   3. **LƯU Ý MÔN HỌC:** Toàn bộ câu hỏi PHẢI thuộc phạm vi kiến thức môn ${inputData.subject} lớp ${inputData.grade}. KHÔNG được ra câu hỏi thuộc môn khác.
   4. **KIỂM TRA CUỐI CÙNG:** Trước khi trả output, hãy tự kiểm tra:
      - Đề thi có chứa phần nào KHÔNG nằm trong whitelist không? Nếu có → XÓA phần đó.
       - Phần Đáp án Đúng - Sai (Đ/S) đã có đủ bảng 4 đáp án (a, b, c, d) và bảng thông tin hướng dẫn giải chi tiết cho cả 4 ý chưa? Nếu chưa → BỔ SUNG đầy đủ.
   ${FIGURE_JSON_HTML_INSTRUCTIONS}
+  ${isGraduationExam(inputData) ? TN_THPT_BLUEPRINT : ''}
   `;
 
   return callWithFallback(async (ai, model) => {
@@ -1981,7 +1656,7 @@ export const repairStep3Exam = async (
   ${structureBlock}
 
   **NHIỆM VỤ:** Trả về TOÀN BỘ đề đã sửa (Full HTML Document), sao cho hết các lỗi trên:
-  - Giữ nguyên các câu đã đúng (nội dung, công thức LaTeX, các thẻ <script type="application/json" class="figure-json"> nếu có).
+  - Giữ nguyên các câu đã đúng (nội dung, công thức hóa học, các thẻ <script type="application/json" class="figure-json"> nếu có).
   - Bổ sung câu/ý/phương án còn thiếu, xoá câu/phần thừa, đánh số lại Câu 1, Câu 2… liên tục trong từng phần.
   - Cập nhật phần ĐÁP ÁN / HƯỚNG DẪN CHẤM cho khớp đề sau khi sửa.
   - Chỉ trả về HTML, không giải thích.
@@ -2011,12 +1686,96 @@ export interface ExamGenerationResult {
   issues: ExamIssue[];
   repaired: boolean;
   usedContract: boolean;
+  /** Số câu đã được AI giải lại độc lập; null nếu không chạy được bước này */
+  verifiedCount: number | null;
+  /** Câu Trả lời ngắn được chèn thêm câu lệnh làm tròn */
+  roundingAdded: number[];
 }
 
 const issueScore = (issues: ExamIssue[]) => issues.reduce((s, i) => s + (i.severity === 'error' ? 10 : 1), 0);
 
+/** Chuẩn hóa trình bày hóa học và câu lệnh làm tròn trên bản đề thô của AI. */
+const polishChemExam = (raw: string) => {
+  const normalized = normalizeChemText(raw);
+  return enforceShortAnswerRounding(normalized);
+};
+
+interface SolverAnswer {
+  part: 'I' | 'II' | 'III';
+  num: number;
+  answer: string;
+  doubt?: string;
+}
+
 /**
- * Sinh đề + KIỂM TRA HẬU SINH bằng code + tự sửa 1 lần nếu sai cấu trúc.
+ * BỘ GIẢI KIỂM CHỨNG: đưa riêng phần đề (không có đáp án) cho AI giải lại độc lập rồi so với đáp án đã ghi.
+ * Sai khác → thành lỗi để bước tự sửa xử lí. AI có thể sai nên kết quả là tín hiệu kiểm tra, không phải chứng minh.
+ */
+export const verifyExamAnswers = async (examHtml: string, inputData: InputData): Promise<{ checked: number; issues: ExamIssue[] }> => {
+  const { exam } = splitExamAndKey(examHtml);
+  const parsed = parseExamForShuffle(examHtml);
+  const prompt = `
+  Bạn là giám khảo Hóa học. Dưới đây là đề môn Hóa học lớp ${inputData.grade}, CHƯA có đáp án. Hãy TỰ GIẢI từng câu, không đoán.
+  Với bài định lượng: tính từng bước theo bảo toàn khối lượng, bảo toàn nguyên tố, bảo toàn electron, bảo toàn điện tích; thể tích mol khí ở điều kiện chuẩn là 24,79 L/mol; làm tròn đúng như đề dặn.
+  Trả về JSON là mảng các phần tử {"part": "I"|"II"|"III", "num": số câu, "answer": đáp án, "doubt": ghi chú nếu đề có vấn đề}:
+  - Phần I: "answer" là A, B, C hoặc D.
+  - Phần II: "answer" là 4 chữ Đ/S theo thứ tự a b c d, ví dụ "ĐSĐS".
+  - Phần III: "answer" là đáp số, dấu phẩy thập phân.
+  Chỉ ghi "doubt" khi có lỗi thật: số mol lẻ vô lý, không bảo toàn điện tích, thiếu dữ kiện, nhiều đáp án đúng, không có đáp án đúng.
+  Bỏ qua phần tự luận.
+
+  ĐỀ:
+  ${exam.replace(/<head\b[\s\S]*?<\/head>/i, '')}
+  `;
+  const answers = await callWithFallback(async (ai, model) => {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+      config: createGeminiConfig({
+        model,
+        systemInstruction: 'Bạn là chuyên gia Hóa học THPT, giải chính xác và chỉ trả về JSON.',
+        responseMimeType: 'application/json',
+        thinkingLevel: ThinkingLevel.HIGH,
+        maxOutputTokens: 16384,
+        temperature: 0,
+      }),
+    });
+    return JSON.parse((response.text || '[]').replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '')) as SolverAnswer[];
+  });
+
+  const issues: ExamIssue[] = [];
+  const clean = (v: string) => String(v ?? '').toUpperCase().replace(/\s+/g, '').replace(/ĐÚNG/g, 'Đ').replace(/SAI/g, 'S');
+  const sameNumber = (a: string, b: string) => {
+    const x = parseFloat(a.replace(',', '.'));
+    const y = parseFloat(b.replace(',', '.'));
+    return a === b || (Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) < 1e-9);
+  };
+  let checked = 0;
+  (Array.isArray(answers) ? answers : []).forEach(item => {
+    const label = `Phần ${item.part} câu ${item.num}`;
+    let recorded: string | undefined;
+    if (item.part === 'I') recorded = parsed.answers.mc[item.num];
+    if (item.part === 'II') {
+      const row = parsed.answers.tf[item.num];
+      recorded = row ? ['a', 'b', 'c', 'd'].map(l => (row as Record<string, string>)[l] || '').join('') : undefined;
+    }
+    if (item.part === 'III') recorded = parsed.answers.short[item.num];
+    if (item.doubt && item.doubt.trim()) {
+      issues.push({ code: 'SOLVER_DOUBT', message: `${label}: ${item.doubt.trim()}`, severity: 'warning' });
+    }
+    if (!recorded) return;
+    checked++;
+    const a = clean(item.answer);
+    const b = clean(recorded);
+    if (item.part === 'III' ? !sameNumber(a, b) : a !== b) {
+      issues.push({ code: 'SOLVER_MISMATCH', message: `${label}: đáp án ghi "${recorded}" nhưng giải lại ra "${item.answer}". Hãy giải lại câu này từng bước, sửa số liệu hoặc đáp án cho đúng.`, severity: 'error' });
+    }
+  });
+  return { checked, issues };
+};
+
+/**
+ * Sinh đề + KIỂM TRA HẬU SINH bằng code + kiểm chứng đáp án + tự sửa 1 lần nếu có lỗi.
  * Trả về cả danh sách lỗi còn lại để giao diện hiển thị cho người dùng.
  */
 export const generateStep3ExamChecked = async (
@@ -2028,10 +1787,13 @@ export const generateStep3ExamChecked = async (
   extractedQuestions?: ExtractedQuestion[],
   referenceMode: ReferenceUsageMode = 'exact',
   matrixContent?: string,
-  isUploadedMatrix: boolean = false
+  isUploadedMatrix: boolean = false,
+  verifyAnswers: boolean = true
 ): Promise<ExamGenerationResult> => {
   const args = [specsContent, questionConfig, inputData, referenceText, referenceImages, extractedQuestions, referenceMode, matrixContent, isUploadedMatrix] as const;
-  let { raw, contract, counts } = await generateStep3ExamRaw(...args);
+  const first = await generateStep3ExamRaw(...args);
+  const { contract, counts } = first;
+  let { html: raw, added: roundingAdded } = polishChemExam(first.raw);
   // Ma trận tải lên mà không đọc được số liệu → không áp số câu (có thể sai), chỉ kiểm tra định dạng
   const expect = contract?.sections
     // Ma trận theo kĩ năng: kiểm tra tổng số câu + định dạng (phần đặt tên theo kĩ năng, không theo Dạng I–IV)
@@ -2039,7 +1801,24 @@ export const generateStep3ExamChecked = async (
     : {
       counts: isUploadedMatrix && !contract ? null : { I: counts.type1, II: counts.type2, III: counts.type3, IV: counts.essay },
     };
-  let issues = validateExamHtml(raw, expect);
+
+  // Kiểm chứng đáp án: lỗi mạng hoặc hết lượt không được làm hỏng đề đã sinh
+  let verifiedCount: number | null = null;
+  const solve = async (html: string): Promise<ExamIssue[]> => {
+    if (!verifyAnswers) return [];
+    try {
+      const { checked, issues: solverIssues } = await verifyExamAnswers(html, inputData);
+      verifiedCount = checked;
+      return solverIssues;
+    } catch (err) {
+      console.warn('[ExamCraft] Bước kiểm chứng đáp án không chạy được:', err);
+      verifiedCount = null;
+      return [{ code: 'SOLVER_SKIPPED', message: 'Chưa kiểm chứng được đáp án bằng AI (lỗi kết nối hoặc hết lượt). Hãy tự rà các câu định lượng.', severity: 'warning' }];
+    }
+  };
+  const inspect = (html: string) => [...validateExamHtml(html, expect), ...checkChemistryExam(html)];
+
+  let issues = [...inspect(raw), ...(await solve(raw))];
   let repaired = false;
 
   if (hasBlockingIssues(issues)) {
@@ -2056,9 +1835,12 @@ export const generateStep3ExamChecked = async (
             : 'Cấu trúc yêu cầu: đúng như Ma trận / Bảng đặc tả đã cung cấp (đủ 4 phương án A–D cho Phần I, đủ 4 ý a–d cho Phần II, có đáp án).';
         candidate = await repairStep3Exam(raw, issues, inputData, block, isUploadedMatrix);
       }
-      const candidateIssues = validateExamHtml(candidate, expect);
+      const polished = polishChemExam(candidate);
+      const hadSolverError = issues.some(i => i.code === 'SOLVER_MISMATCH');
+      const candidateIssues = [...inspect(polished.html), ...(hadSolverError ? await solve(polished.html) : issues.filter(i => i.code.startsWith('SOLVER')))];
       if (issueScore(candidateIssues) < issueScore(issues)) {
-        raw = candidate;
+        raw = polished.html;
+        roundingAdded = polished.added;
         issues = candidateIssues;
         repaired = true;
       }
@@ -2067,7 +1849,50 @@ export const generateStep3ExamChecked = async (
     }
   }
 
-  return { html: renderFiguresInHtml(raw.replace(TRUNCATION_MARKER, '')), issues, repaired, usedContract: !!contract };
+  const withHeader = applyExamHeader(raw.replace(TRUNCATION_MARKER, ''), getExamHeaderProfile(), {
+    examType: inputData.examType,
+    grade: inputData.grade,
+    duration: inputData.duration,
+  });
+  return { html: renderFiguresInHtml(withHeader), issues, repaired, usedContract: !!contract, verifiedCount, roundingAdded };
+};
+
+/**
+ * Biến thể số liệu tương đương (chống quay cóp): giữ nguyên đề, chỉ đổi số liệu Phần II và Phần III rồi tính lại đáp án.
+ */
+export const generateNumericVariant = async (examHtml: string, inputData: InputData, index: number): Promise<string> => {
+  const prompt = `
+  Dưới đây là một đề Hóa học (HTML) kèm đáp án. Hãy tạo BIẾN THỂ SỐ ${index} tương đương về độ khó:
+  - Phần I, Phần IV và mọi phần đầu đề: GIỮ NGUYÊN từng chữ.
+  - Phần II và Phần III: giữ nguyên dạng câu, nhóm chất và lối hỏi; CHỈ ĐỔI số liệu (khối lượng, thể tích, nồng độ, hiệu suất, số mol) sao cho hợp lí về hóa học. Câu không có số liệu thì giữ nguyên.
+  - Tính lại toàn bộ đáp án và hướng dẫn giải theo số liệu mới; mệnh đề Đúng/Sai có thể đổi đáp án nhưng phải chứng minh lại.
+  - Đáp án Phần III vẫn tối đa 4 kí tự, dấu phẩy thập phân, giữ câu lệnh làm tròn.
+  - Giữ nguyên cấu trúc HTML, số câu, số ý, thẻ figure-json và phần ĐÁP ÁN VÀ HƯỚNG DẪN GIẢI. Chỉ trả về HTML.
+
+  ${CHEM_EXAM_RULES}
+
+  ĐỀ GỐC:
+  ${examHtml.replace(/<img\b[^>]*data-figure-svg-b64=[^>]*>/gi, '[HÌNH GIỮ NGUYÊN]')}
+  `;
+  const out = await callWithFallback(async (ai, model) => {
+    const response = await ai.models.generateContent({
+      model,
+      contents: prompt,
+      config: createGeminiConfig({
+        model,
+        systemInstruction: getSystemInstruction(false),
+        thinkingLevel: ThinkingLevel.MEDIUM,
+        maxOutputTokens: 32768,
+        temperature: 0.5,
+      }),
+    });
+    if (wasTruncated(response)) throw new UserFacingError('Biến thể số liệu quá dài nên bị cắt. Vui lòng thử lại hoặc chọn model Pro.');
+    return (response.text || '').replace(/^```html\s*/i, '').replace(/\s*```$/i, '');
+  });
+  // Hình trong đề gốc đi cùng câu: đặt lại ảnh theo thứ tự xuất hiện
+  const figures = examHtml.match(/<img\b[^>]*data-figure-svg-b64=[^>]*>/gi) || [];
+  let figureIndex = 0;
+  return renderFiguresInHtml(polishChemExam(out.replace(/\[HÌNH GIỮ NGUYÊN\]/g, () => figures[figureIndex++] || '')).html);
 };
 
 /** Giữ API cũ: chỉ trả về HTML đề (đã kiểm tra + tự sửa). */

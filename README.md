@@ -1,20 +1,16 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Tạo Đề Thi Hóa Học THPT
 
-# Run and deploy your AI Studio app
+Ứng dụng tạo Ma trận, Bản đặc tả, Đề thi, Đáp án và trọn bộ hồ sơ khảo thí môn Hóa học lớp 10, 11, 12
+theo Chương trình GDPT 2018, bộ sách Kết nối tri thức với cuộc sống.
 
-This contains everything you need to run your app locally.
+**Tác giả:** Thầy Nguyễn Thanh Phong, Trường THPT Nguyễn Thượng Hiền, chuyên môn Hóa học GDPT 2018.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1t1zSmkOKCbgmpCJYVQG5bC6XI2hZ6nlb
+## Chạy trên máy
 
-## Run Locally
+1. Cài thư viện: `npm install`
+2. Chạy app: `npm run dev`
+3. Nhập Gemini API Key trong mục Cài đặt của app.
 
-**Prerequisites:**  Node.js
+## Kiểm thử
 
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+`npm test`

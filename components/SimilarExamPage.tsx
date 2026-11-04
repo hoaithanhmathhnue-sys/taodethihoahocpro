@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Copy, RotateCcw, FileSpreadsheet, CheckCircle, Download, FileText, Sliders, Image, List, BrainCircuit, BookOpen } from 'lucide-react';
 import FileUploadZone from './FileUploadZone';
 import MarkdownRenderer from './MarkdownRenderer';
-import BbtQuickGenerator from './BbtQuickGenerator';
+import ChemFigurePanel from './ChemFigurePanel';
 import { generateSimilarExam } from '../services/similarExamService';
 import { exportToDoc } from '../services/exportUtils';
 import MathFormatSelect from './MathFormatSelect';
@@ -401,15 +401,11 @@ const SimilarExamPage: React.FC<SimilarExamPageProps> = ({ checkAuth }) => {
           </div>
 
           {result && (activeTab === 'examContent' || activeTab === 'detailedSolution') && (
-            <BbtQuickGenerator
-              examContent={result.examContent}
-              onUpdateExamContent={(newContent) =>
-                setResult((prev) => (prev ? { ...prev, examContent: newContent } : prev))
-              }
-              solutionContent={result.detailedSolution}
-              onUpdateSolutionContent={(newContent) =>
-                setResult((prev) => (prev ? { ...prev, detailedSolution: newContent } : prev))
-              }
+            <ChemFigurePanel
+              className="mb-3"
+              documents={[
+                { id: 'exam', label: 'Đề thi', content: result.examContent, onUpdate: next => setResult(prev => (prev ? { ...prev, examContent: next } : prev)) },
+              ]}
             />
           )}
 

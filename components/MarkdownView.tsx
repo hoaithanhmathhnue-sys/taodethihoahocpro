@@ -1,17 +1,21 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import {
   renderFiguresInHtml,
   renderFigureSpecToSvg,
   svgToDataUrl,
   upgradeAutoFigureImagesInDom,
 } from '../services/figureEngine';
+import { layoutExamForPrint } from '../services/examLayout';
 
 interface Props {
   content: string;
+  /** Xem trước đúng cách chia cột phương án khi in */
+  examLayout?: boolean;
 }
 
-const MarkdownView: React.FC<Props> = ({ content }) => {
+const MarkdownView: React.FC<Props> = ({ content: rawContent, examLayout = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const content = useMemo(() => (examLayout ? layoutExamForPrint(rawContent) : rawContent), [rawContent, examLayout]);
 
   useEffect(() => {
     upgradeAutoFigureImagesInDom(containerRef.current, 300);
@@ -95,7 +99,7 @@ const MarkdownView: React.FC<Props> = ({ content }) => {
                     className="figure-auto-img max-w-full h-auto"
                     src={svgToDataUrl(svg)}
                     data-figure-svg-b64={b64Svg}
-                    alt="Bảng biến thiên / Hình minh họa"
+                    alt="Hình minh họa"
                   />
                 </div>
               );
