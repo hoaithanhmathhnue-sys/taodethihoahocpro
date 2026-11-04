@@ -178,7 +178,10 @@ export function normalizeMathForWord(
     m.includes('\u00A0') ? '\u00A0' : ' '
   );
   // Bỏ NBSP ngay đầu đoạn khi công thức mở đầu một dòng
-  out = out.replace(/>\u00A0(?=<span class="math-inline")/g, '>');
+  // (chỉ sau thẻ MỞ: sau thẻ đóng như nhãn "A." vẫn phải giữ dấu cách)
+  out = out.replace(/(<(?!\/)[^>]*>)\u00A0(?=<span class="math-inline")/g, '$1');
+  // Công thức đứng ngay trước dấu câu: không để cách trước dấu câu
+  out = out.replace(/(data-mw="i">\$[^\n$]*\$<\/span>)\u00A0(?=[.,;:?!)])/g, '$1');
 
   // --- 5. Đưa non-ASCII về entity (guard lỗi dấu tiếng Việt) -------------
   if (encodeEntities) out = encodeNonAsciiToEntities(out);

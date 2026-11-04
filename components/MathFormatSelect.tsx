@@ -3,7 +3,8 @@ import { getWordMathFormat, setWordMathFormat, WordMathFormat } from '../service
 
 const HELP =
   'Cách ghi công thức trong file Word:\n' +
-  '• LaTeX ($...$): giữ nguyên mã LaTeX như trước.\n' +
+  '• Mặc định: công thức Hóa là chữ có chỉ số trên, dưới, sửa như chữ thường.\n' +
+  '• LaTeX ($...$): công thức ghi bằng mã LaTeX.\n' +
   '• Equation: công thức Equation của Word, sửa được ngay trong Word. ' +
   'Muốn đổi sang MathType: mở file > tab MathType > Convert Equations > chọn "Microsoft Word equations" > Convert.';
 
@@ -23,6 +24,7 @@ const MathFormatSelect: React.FC<{ className?: string }> = ({ className = '' }) 
         }}
         className="border border-slate-300 rounded-md px-1.5 py-1 bg-white text-slate-700 text-xs focus:outline-none focus:ring-1 focus:ring-teal-400"
       >
+        <option value="default">Mặc định (chỉ số trên, dưới)</option>
         <option value="latex">LaTeX ($...$)</option>
         <option value="equation">Equation (đổi MathType được)</option>
       </select>

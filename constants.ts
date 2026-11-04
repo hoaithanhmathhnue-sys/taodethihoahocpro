@@ -4,7 +4,7 @@ export const CHEM_EXAM_RULES = `
   **===== CHUẨN MỰC HÓA HỌC GDPT 2018 (BẮT BUỘC) =====**
   1. **Công thức và phương trình:** viết bằng thẻ HTML, KHÔNG dùng LaTeX, KHÔNG dùng kí tự Unicode chỉ số.
      Đúng: H<sub>2</sub>SO<sub>4</sub>, Al<sub>2</sub>(SO<sub>4</sub>)<sub>3</sub>, Fe<sup>3+</sup>, Cr<sub>2</sub>O<sub>7</sub><sup>2-</sup>, [Cu(NH<sub>3</sub>)<sub>4</sub>]<sup>2+</sup>, 25 <sup>o</sup>C, 1s<sup>2</sup>2s<sup>2</sup>.
-     Mũi tên một chiều → và thuận nghịch ⇌. Trạng thái (s), (l), (g), (aq). Điều kiện phản ứng ghi trong ngoặc ngay sau mũi tên: →(t<sup>o</sup>, xt). Phương trình phải cân bằng nguyên tố và điện tích.
+     Mũi tên một chiều → và thuận nghịch ⇌. Trạng thái (s), (l), (g), (aq). Điều kiện phản ứng ghi trong ngoặc ngay sau mũi tên: →(t<sup>o</sup>, xt). Phương trình phải cân bằng nguyên tố và điện tích. Phương trình đứng riêng một dòng thì đặt trong <p style="text-align:center">.
      Chỉ khi có phân số hoặc biểu thức K<sub>C</sub> nhiều tầng mới dùng LaTeX $...$.
   2. **Danh pháp IUPAC tiếng Anh theo SGK mới:** sodium, potassium, magnesium, aluminium, iron, copper, sulfur, chlorine, hydrogen, oxygen, nitrogen, alkane, alkene, alkyne, arene, alcohol, phenol, aldehyde, ketone, carboxylic acid, ester, amine, amino acid, peptide, polymer, glucose, saccharose, cellulose, hydrochloric acid, sulfuric acid, nitric acid, ammonia. Vẫn viết "oxi hóa – khử", "tráng bạc" theo SGK.
   3. **Hằng số:** thể tích 1 mol khí ở điều kiện chuẩn (25 <sup>o</sup>C, 1 bar) là 24,79 L. TUYỆT ĐỐI không dùng 22,4 L và không dùng "đktc". Kí hiệu Δ<sub>r</sub>H<sup>o</sup><sub>298</sub>, Δ<sub>f</sub>H<sup>o</sup><sub>298</sub>, E<sub>b</sub>, E<sup>o</sup> của cặp oxi hóa – khử.

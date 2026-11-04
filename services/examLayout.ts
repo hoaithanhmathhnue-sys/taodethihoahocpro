@@ -164,23 +164,30 @@ export const splitExamAndKey = (html: string): { exam: string; key: string } => 
 const plainLength = (html: string): number =>
   html.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, 'x').trim().length;
 
-/** Độ rộng vùng in A4 lề 0,5 inch: 523pt. Ngưỡng tính theo chữ Times 13pt. */
+/** Nhãn "Câu n:", "A.", "a)" in đậm xanh; nội dung câu thụt vào thẳng hàng theo nhãn. */
+const LABEL_STYLE = 'color:#0000FF;font-weight:bold;';
+const INDENT_PT = 48;
+const HANGING_INDENT = `margin-left:${INDENT_PT}pt;text-indent:-${INDENT_PT}pt;`;
+const BODY_INDENT = `margin-left:${INDENT_PT}pt;`;
+const labelSpan = (text: string) => `<span style="${LABEL_STYLE}">${text}</span>`;
+
+/** Vùng in A4 lề 0,5 inch rộng 523pt, trừ phần thụt 48pt còn 475pt. Ngưỡng tính theo chữ Times 13pt. */
 export const columnsForOptions = (contents: string[]): 4 | 2 | 1 => {
   if (contents.some(c => /<img|<table|data-fig-ph|\$\$|<script/i.test(c))) return 1;
   const longest = Math.max(...contents.map(plainLength));
-  if (longest <= 18) return 4;
-  if (longest <= 42) return 2;
+  if (longest <= 16) return 4;
+  if (longest <= 36) return 2;
   return 1;
 };
 
-const TAB_STOPS: Record<4 | 2, string> = { 4: 'left 130pt 261pt 392pt', 2: 'left 261pt' };
+const TAB_STOPS: Record<4 | 2, string> = { 4: 'left 167pt 286pt 405pt', 2: 'left 286pt' };
 const TAB_SPAN = `<span style="mso-tab-count:1"> </span>`;
 const LETTERS = ['A', 'B', 'C', 'D'];
 
 const optionRows = (contents: string[], cols: 4 | 2 | 1): string[] => {
   const cell = (i: number, width: string) =>
-    `<span class="opt" style="display:inline-block;width:${width};vertical-align:top;"><b>${LETTERS[i]}.</b> ${contents[i]}</span>`;
-  if (cols === 1) return contents.map((_c, i) => `<b>${LETTERS[i]}.</b> ${contents[i]}`);
+    `<span class="opt" style="display:inline-block;width:${width};vertical-align:top;">${labelSpan(`${LETTERS[i]}.`)} ${contents[i]}</span>`;
+  if (cols === 1) return contents.map((_c, i) => `${labelSpan(`${LETTERS[i]}.`)} ${contents[i]}`);
   if (cols === 4) return [[0, 1, 2, 3].map(i => cell(i, '24.5%')).join(TAB_SPAN)];
   return [cell(0, '49.5%') + TAB_SPAN + cell(1, '49.5%'), cell(2, '49.5%') + TAB_SPAN + cell(3, '49.5%')];
 };
@@ -251,6 +258,64 @@ const isBalanced = (html: string): boolean => {
   return stack.length === 0;
 };
 
+const addStyle = (attrs: string, rule: string): string =>
+  /\bstyle\s*=\s*"/i.test(attrs)
+    ? attrs.replace(/\bstyle\s*=\s*"([^"]*)"/i, (_m, value: string) => `style="${value.replace(/;?\s*$/, ';')}${rule}"`)
+    : `${attrs} style="${rule}"`;
+
+/** Đoạn chỉ gồm phương trình phản ứng (không có chữ thường đầu từ): căn giữa như đề in. */
+const isEquationLine = (html: string): boolean => {
+  const text = html.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
+  return /[→⇌]|\\right(?:arrow|leftharpoons)/.test(text) && text.split(/\s+/).every(word => !/^[a-zà-ỹđ]/.test(word));
+};
+
+/**
+ * Đoạn chứa nhãn câu: nhãn thành "Câu n:" đậm xanh, sau nhãn là Tab tới vị trí thụt, các dòng sau thẳng hàng.
+ * Trả về khối đã sửa và vị trí kết thúc của thẻ mở đoạn đó (để biết các đoạn nào nằm sau).
+ */
+const styleQuestionStem = (block: string, numOffset: number): { block: string; stemEnd: number } => {
+  const word = /(Câu|Question)\s+$/i.exec(block.slice(0, numOffset));
+  if (!word) return { block, stemEnd: numOffset };
+  const closing = '(?:\\s*</(?:span|b|strong|u|i|em)>)*';
+  const parts = new RegExp(`^(\\d{1,3})(\\s*\\([^)<]*\\))?\\s*[.:)\\-–]?(${closing})\\s*[.:)\\-–]?\\s*`).exec(block.slice(numOffset));
+  if (!parts) return { block, stemEnd: numOffset };
+  const labelHtml = `<span class="q-label" style="display:inline-block;min-width:${INDENT_PT - 2}pt;${LABEL_STYLE}">${word[1]} ${parts[1]}${parts[2] || ''}:</span>`;
+  const head = block.slice(0, word.index);
+  const tail = block.slice(numOffset + parts[0].length);
+
+  // Thẻ đoạn bao quanh nhãn: phía trước nhãn không còn chữ nào trong đoạn đó
+  const tagRe = /<(p|div|li)\b([^>]*)>/gi;
+  let enclosing: RegExpExecArray | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(head))) enclosing = m;
+  if (!enclosing || head.slice(enclosing.index + enclosing[0].length).replace(/<[^>]+>/g, '').trim()) {
+    const body = head + labelHtml + parts[3] + TAB_SPAN + tail;
+    return { block: body, stemEnd: head.length + labelHtml.length };
+  }
+  const openTag = `<${enclosing[1]}${addStyle(enclosing[2], HANGING_INDENT)}>`;
+  const before = head.slice(0, enclosing.index) + openTag + head.slice(enclosing.index + enclosing[0].length);
+  return { block: before + labelHtml + parts[3] + TAB_SPAN + tail, stemEnd: before.length + labelHtml.length };
+};
+
+/** Các đoạn sau đoạn dẫn của câu: thụt thẳng hàng với nội dung, phương trình đứng riêng thì căn giữa. */
+const indentFollowingBlocks = (block: string, stemEnd: number): string => {
+  const head = block.slice(0, stemEnd);
+  const body = block.slice(stemEnd).replace(/<(p|li)\b([^>]*)>([\s\S]*?)<\/\1>/gi, (full, tag: string, attrs: string, inner: string) => {
+    if (/margin/i.test(attrs)) return full;
+    const centered = isEquationLine(inner) ? 'text-align:center;' : '';
+    return `<${tag}${addStyle(attrs, `${BODY_INDENT}${centered}`)}>${inner}</${tag}>`;
+  });
+  return head + body;
+};
+
+/** Tiêu đề "PHẦN ..." luôn in đậm. */
+const boldSectionHeading = (block: string, questionOffset: number): string => {
+  const m = /<(p|div)\b([^>]*)>/i.exec(block);
+  if (!m || m.index >= questionOffset) return block;
+  if (!/^\s*(?:<[^>]+>\s*)*(?:PHẦN|Phần)\b/.test(block.slice(m.index + m[0].length))) return block;
+  return `${block.slice(0, m.index)}<${m[1]}${addStyle(m[2], 'font-weight:bold;')}>${block.slice(m.index + m[0].length)}`;
+};
+
 /** `from`: vị trí bắt đầu khối; câu đầu mỗi phần tính từ tiêu đề phần để tiêu đề không nằm trơ cuối trang. */
 const layoutQuestion = (src: string, q: ParsedExam['questions'][number], from: number): string => {
   let block = src.slice(from, q.end);
@@ -258,24 +323,41 @@ const layoutQuestion = (src: string, q: ParsedExam['questions'][number], from: n
     const contents = q.slots.map(slot => src.slice(slot.contentStart, slot.contentEnd).trim());
     const cols = q.kind === 'mc' ? columnsForOptions(contents) : 1;
     const { pos, opens } = backOverOpenTags(src, q.slots[0].labelStart);
-    const end = forwardOverCloseTags(src, q.slots[3].contentEnd, opens);
+    let end = forwardOverCloseTags(src, q.slots[3].contentEnd, opens);
+    let before = src.slice(from, pos);
+    let isolated = opens > 0;
+    if (!isolated) {
+      // Phương án nằm chung đoạn với câu dẫn (A. … <br> B. …): tách đoạn để thụt và giữ trang đúng
+      const close = /^\s*<\/p>/i.exec(src.slice(end, end + 40));
+      if (close) {
+        end += close[0].length;
+        before = `${before.replace(/(?:\s*<br\s*\/?>)+\s*$/i, '')}</p>`;
+        isolated = true;
+      }
+    }
     if (pos >= from && end <= q.end) {
       const rows = q.kind === 'mc'
         ? optionRows(contents, cols)
-        : contents.map((c, i) => `<b>${'abcd'[i]})</b> ${c}`);
-      const rendered = opens > 0
-        ? rows.map(r => `<p class="opts" style="margin:2pt 0 2pt 12pt;${cols === 1 ? '' : `tab-stops:${TAB_STOPS[cols]};`}">${r}</p>`).join('\n')
+        : contents.map((c, i) => `${labelSpan(`${'abcd'[i]})`)} ${c}`);
+      const rendered = isolated
+        ? rows.map(r => `<p class="opts" style="margin:2pt 0 2pt ${INDENT_PT}pt;${cols === 1 ? '' : `tab-stops:${TAB_STOPS[cols]};`}">${r}</p>`).join('\n')
         : rows.join('<br/>');
-      block = src.slice(from, pos) + rendered + src.slice(end, q.end);
+      block = before + rendered + src.slice(end, q.end);
     }
   }
+  // Dòng trống AI chèn giữa các câu: khoảng cách đã do lề đoạn văn đảm nhận
+  block = block.replace(/(<\/(?:p|div)>)\s*(?:<!--[\s\S]*?-->\s*)?(?:<br\s*\/?>\s*(?:<!--[\s\S]*?-->\s*)?)+/gi, '$1');
+  const numOffset = block.indexOf(src.slice(q.numPos - 8, q.numPos + q.numLen), Math.max(0, q.start - from - 1));
+  if (q.numLen && numOffset >= 0) {
+    const styled = styleQuestionStem(block, numOffset + 8);
+    block = indentFollowingBlocks(styled.block, styled.stemEnd);
+  }
+  block = boldSectionHeading(block, q.start - from);
   const kept = applyKeepTogether(block);
   return isBalanced(kept) ? `<div class="q-block">${kept}</div>` : kept;
 };
 
-/** Chế bản phần câu hỏi để in: chia cột phương án, giữ trọn câu. Phần đáp án giữ nguyên. Đã chế bản thì không làm lại. */
-export const layoutExamForPrint = (html: string): string => {
-  if (!html || /class="q-block"/.test(html)) return html;
+const layoutSingleExam = (html: string): string => {
   const exam = parseExamForShuffle(html);
   if (!exam.questions.length) return html;
   let out = html;
@@ -285,4 +367,19 @@ export const layoutExamForPrint = (html: string): string => {
     out = out.slice(0, from) + layoutQuestion(html, q, from) + out.slice(q.end);
   });
   return out;
+};
+
+const PAGE_BREAK_RE = /(<div\b[^>]*page-break-before\s*:\s*always[^>]*>\s*<\/div>)/i;
+const KEY_PIECE_RE = /^(?:\s|<[^>]+>|#)*(?:BẢNG\s*)?(?:ĐÁP\s*ÁN|HƯỚNG\s*DẪN|LỜI\s*GIẢI)/i;
+
+/**
+ * Chế bản phần câu hỏi để in: nhãn đậm xanh, thụt thẳng hàng, chia cột phương án, giữ trọn câu. Phần đáp án giữ nguyên.
+ * File gộp nhiều đề (ngăn bằng ngắt trang) được chế bản từng đề. Đã chế bản thì không làm lại.
+ */
+export const layoutExamForPrint = (html: string): string => {
+  if (!html || /class="q-block"/.test(html)) return html;
+  return html
+    .split(new RegExp(PAGE_BREAK_RE.source, 'gi'))
+    .map((piece, i) => (i % 2 === 1 || KEY_PIECE_RE.test(piece) ? piece : layoutSingleExam(piece)))
+    .join('');
 };

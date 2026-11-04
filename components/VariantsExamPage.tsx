@@ -155,7 +155,7 @@ const VariantsExamPage: React.FC<VariantsExamPageProps> = ({ checkAuth }) => {
     const pageBreak = '\n\n<div style="page-break-before: always"></div>\n\n';
     const fullContent = [col1, col2, col3].filter(Boolean).join(pageBreak);
     const fileName = file ? `Bo_3_De_Thi_${file.name.split('.')[0]}` : 'ExamGen_Output';
-    exportToDoc(fullContent, fileName);
+    exportToDoc(fullContent, fileName, { examLayout: true });
   };
 
   const reset = () => {

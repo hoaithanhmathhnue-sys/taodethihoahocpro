@@ -341,22 +341,23 @@ await t('Chia cột theo độ dài; dùng Tab chuẩn, không dùng dấu cách
   assert.equal(m.columnsForOptions(['<img src="x">', 'B', 'C', 'D']), 1);
   const laid = m.layoutExamForPrint(sampleExam());
   assert.ok(laid.includes('mso-tab-count:1'));
-  assert.ok(laid.includes('tab-stops:left 130pt 261pt 392pt'));
+  assert.ok(laid.includes('tab-stops:left 167pt 286pt 405pt'));
   assert.ok(laid.includes('page-break-after:avoid'));
   assert.equal((laid.match(/class="q-block"/g) || []).length, 5);
   // Tiêu đề phần nằm cùng khối với câu đầu của phần
-  assert.ok(/<div class="q-block">\s*<p style="[^"]*page-break-after:avoid[^"]*"><b>PHẦN II\./.test(laid));
+  assert.ok(/<div class="q-block">\s*<p style="[^"]*page-break-after:avoid[^"]*font-weight:bold;"><b>PHẦN II\./.test(laid));
   // Chỗ đặt hình không bị đổi thuộc tính
   const withPh = m.layoutExamForPrint(sampleExam().replace('Phát biểu nào sau đây đúng về chất béo?</p>', 'Phát biểu nào sau đây đúng về chất béo?</p><div data-fig-ph="0"></div>'));
   assert.ok(withPh.includes('<div data-fig-ph="0"></div>'));
   // Vẫn còn đủ 4 phương án đúng nội dung, đáp án không đổi, phần đáp án không bị chế bản
   const parsed = m.parseExamForShuffle(laid);
   assert.equal(parsed.questions.filter(q => q.kind === 'mc').length, 2);
-  assert.ok(laid.includes('<b>A.</b> NaCl.'));
-  assert.ok(laid.includes('<b>D.</b> Chất béo không bị thủy phân'));
+  const blue = text => `<span style="color:#0000FF;font-weight:bold;">${text}</span>`;
+  assert.ok(laid.includes(`${blue('A.')} NaCl.`));
+  assert.ok(laid.includes(`${blue('D.')} Chất béo không bị thủy phân`));
   assert.equal(m.layoutExamForPrint(laid), laid);
   // Ý Đúng/Sai thành đoạn văn; thẻ bọc .options không còn để tránh các câu dính chuỗi khi sang trang
-  assert.ok(laid.includes('<b>a)</b> Fe là chất khử.'));
+  assert.ok(laid.includes(`${blue('a)')} Fe là chất khử.`));
   assert.ok(!laid.includes('class="options"'));
   assert.ok(!/<div[^>]*page-break-after:avoid[^>]*>\s*<(?:div|p)\b/.test(laid));
   // Đoạn cuối mỗi câu không được "dính" với câu sau
@@ -364,6 +365,64 @@ await t('Chia cột theo độ dài; dùng Tab chuẩn, không dùng dấu cách
     const tags = x[1].match(/<(?:p|div|li)\b[^>]*>/g) || [];
     assert.ok(!tags[tags.length - 1].includes('page-break-after'), tags[tags.length - 1]);
   });
+});
+
+await t('Nhãn câu đậm xanh, thụt đầu dòng; đúng với mọi cách AI viết nhãn', () => {
+  const laid = m.layoutExamForPrint(sampleExam());
+  assert.ok(/class="q-label"[^>]*color:#0000FF;font-weight:bold;[^>]*>Câu 1:<\/span>/.test(laid));
+  assert.ok(/margin-left:48pt;text-indent:-48pt;/.test(laid));
+  assert.ok(!/>Câu 1\.</.test(laid));
+  // Phần đáp án không bị đổi
+  assert.ok(laid.includes('ĐÁP ÁN VÀ HƯỚNG DẪN GIẢI') && laid.includes('<td>1</td>'));
+  const q = (label, rest = ' Nội dung câu hỏi hóa học<br>A. x1<br>B. x2<br>C. x3<br>D. x4') => `<p><b>PHẦN I. Trắc nghiệm nhiều lựa chọn</b></p><p>${label}${rest}</p>`;
+  for (const [label, expected] of [
+    ['<strong>Câu 1:</strong>', 'Câu 1:'],
+    ['<b>Câu 1</b>.', 'Câu 1:'],
+    ['Câu 1.', 'Câu 1:'],
+    ['<span class="question-number">Câu 1.</span>', 'Câu 1:'],
+  ]) {
+    const out = m.layoutExamForPrint(q(label));
+    assert.ok(out.includes(`>${expected}</span>`), label);
+    assert.ok(out.includes('color:#0000FF;font-weight:bold;">A.</span> x1'), label);
+    // Phương án tách khỏi đoạn câu dẫn, thẻ vẫn cân bằng
+    assert.ok(!/x1<br/.test(out), label);
+    assert.ok(out.includes('class="q-block"'), label);
+  }
+  // Điểm của câu tự luận giữ nguyên trong nhãn
+  const essay = m.layoutExamForPrint('<p><b>PHẦN IV. Tự luận</b></p><p><b>Câu 1 (1,0 điểm).</b> Viết phương trình.</p>');
+  assert.ok(essay.includes('>Câu 1 (1,0 điểm):</span>'));
+  // Đoạn dẫn thứ hai thụt thẳng hàng; phương trình đứng riêng căn giữa; bỏ dòng trống giữa các câu
+  const multi = m.layoutExamForPrint('<p><b>PHẦN I. Trắc nghiệm nhiều lựa chọn</b></p><p>Câu 1. Giai đoạn phát triển mạch:</p><p>CH<sub>4</sub> + Cl<sub>2</sub> → CH<sub>3</sub>Cl + HCl</p><p>Nhận định nào đúng?</p><div class="options"><div class="option-item">A. a1.</div><div class="option-item">B. a2.</div><div class="option-item">C. a3.</div><div class="option-item">D. a4.</div></div><br> <!-- Dòng trống --><p>Câu 2. Khác?</p><div class="options"><div class="option-item">A. b1.</div><div class="option-item">B. b2.</div><div class="option-item">C. b3.</div><div class="option-item">D. b4.</div></div>');
+  assert.ok(/<p style="[^"]*margin-left:48pt;text-align:center;">CH<sub>4/.test(multi));
+  assert.ok(/<p style="[^"]*margin-left:48pt;">Nhận định nào đúng/.test(multi));
+  assert.ok(!/<br\s*\/?>\s*(<!--|<\/div><div class="q-block">)/.test(multi));
+  assert.ok(!multi.includes('Dòng trống'));
+  // File gộp nhiều đề: đề nào cũng được chế bản; phần hướng dẫn giải giữ nguyên
+  const pieces = m.layoutExamForPrint(`${q('Câu 1.')}<div style="page-break-before: always"></div>${q('Câu 1.')}<div style="page-break-before: always"></div><h2>HƯỚNG DẪN GIẢI CHI TIẾT</h2><p>Câu 1. Đáp số 5.</p>`);
+  assert.equal((pieces.match(/class="q-block"/g) || []).length, 2);
+  assert.ok(pieces.includes('<p>Câu 1. Đáp số 5.</p>'));
+  assert.equal(m.layoutExamForPrint(laid), laid);
+});
+
+await t('Công thức HTML sang LaTeX: chỉ số, ion, phương trình; chữ thường giữ nguyên', () => {
+  const x = m.chemHtmlToLatex;
+  assert.equal(x('H<sub>2</sub>SO<sub>4</sub>'), '$\\mathrm{H}_{2}\\mathrm{SO}_{4}$');
+  assert.equal(x('Fe<sup>3+</sup>.'), '$\\mathrm{Fe}^{3+}$.');
+  assert.equal(x('[Cu(NH<sub>3</sub>)<sub>4</sub>]<sup>2+</sup>'), '$\\mathrm{[Cu(NH}_{3}\\mathrm{)}_{4}\\mathrm{]}^{2+}$');
+  assert.equal(x('Khí (H<sub>2</sub>) và'), 'Khí ($\\mathrm{H}_{2}$) và');
+  assert.equal(x('khí (H<sub>2</sub> và'), 'khí ($\\mathrm{H}_{2}$ và');
+  assert.equal(x('25 <sup>o</sup>C'), '25 <sup>o</sup>C');
+  assert.equal(x('Δ<sub>r</sub>H<sup>o</sup><sub>298</sub>'), '$\\Delta _{\\mathrm{r}}\\mathrm{H}^{\\mathrm{o}}_{298}$');
+  assert.equal(x('CH<sub>3</sub>–CH<sub>2</sub>–Cl'), '$\\mathrm{CH}_{3}\\mathrm{-CH}_{2}\\mathrm{-Cl}$');
+  assert.equal(x('Fe + 2HCl → FeCl<sub>2</sub> + H<sub>2</sub>'), '$\\mathrm{Fe} + \\mathrm{2HCl} \\rightarrow \\mathrm{FeCl}_{2} + \\mathrm{H}_{2}$');
+  assert.equal(x('Cu<sup>2+</sup> + 2e → Cu'), '$\\mathrm{Cu}^{2+} + \\mathrm{2e} \\rightarrow \\mathrm{Cu}$');
+  assert.equal(x('Al(OH)<sub>3</sub>(s) ⇌ Al<sup>3+</sup>(aq)'), '$\\mathrm{Al(OH)}_{3}\\mathrm{(s)} \\rightleftharpoons \\mathrm{Al}^{3+}\\mathrm{(aq)}$');
+  // Không đổi: chữ thường, chất không chỉ số ngoài phương trình, thẻ và thuộc tính, hình, công thức có sẵn
+  for (const keep of ['Câu 12. Cho HCl và NaCl', 'A + B', '<p class="H2O" title="x">nước</p>', '<script class="figure-json">{"a":"H<sub>2</sub>"}</script>', '$\\frac{a}{b}$', 'từ lỏng → rắn']) {
+    assert.equal(x(keep), keep, keep);
+  }
+  // Giữ thẻ bao quanh
+  assert.equal(x('<p><b>H<sub>2</sub>O</b></p>'), '<p><b>$\\mathrm{H}_{2}\\mathrm{O}$</b></p>');
 });
 
 await t('Đảo đề giữ trật tự mức độ: câu chỉ đổi chỗ với câu cùng mức', () => {

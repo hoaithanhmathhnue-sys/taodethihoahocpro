@@ -180,6 +180,123 @@ export const applyIupacNames = (text: string): string => {
   return s.replace(new RegExp(`(?<![${VI_LETTER}])([${VI_LETTER}]+) \\(\\1, `, 'giu'), '$1 (');
 };
 
+/* ---------------------------- Công thức HTML → LaTeX (khi giáo viên chọn LaTeX hoặc Equation) ---------------------------- */
+
+const TAG_SKIP_RE = /(<head\b[\s\S]*?<\/head>|<script\b[\s\S]*?<\/script>|<style\b[\s\S]*?<\/style>|<svg\b[\s\S]*?<\/svg>|<!--[\s\S]*?-->|<(?!\/?su[bp]\b)\/?[a-zA-Z][^>]*>)/gi;
+
+const baseToLatex = (text: string): string | null => {
+  if (/[^A-Za-z0-9()\[\]Δ.\-–=≡]/.test(text)) return null;
+  return text
+    .split(/(Δ|=|≡)/)
+    .map(part => {
+      if (part === 'Δ') return '\\Delta ';
+      if (part === '=') return '=';
+      if (part === '≡') return '\\equiv ';
+      return part ? `\\mathrm{${part.replace(/–/g, '-')}}` : '';
+    })
+    .join('');
+};
+
+const scriptToLatex = (text: string): string | null => {
+  const t = text.trim().replace(/–/g, '-');
+  if (/[^A-Za-z0-9+\-,.]/.test(t)) return null;
+  // Giữ dạng số và dấu; phần chữ viết đứng
+  return t.replace(/[A-Za-z]+/g, w => `\\mathrm{${w}}`);
+};
+
+/** Một cụm công thức có chỉ số → "$...$". Không đọc chắc chắn được thì giữ nguyên. */
+const runToLatex = (run: string): string => {
+  // Độ C giữ dạng chữ: Equation với mũ không có cơ số tạo khoảng trống xấu
+  if (/^<sup>o<\/sup>C?$/i.test(run)) return run;
+  let body = run;
+  let prefix = '';
+  let suffix = '';
+  // Ngoặc lẻ ở hai đầu thuộc câu văn, không thuộc công thức
+  const count = (s: string, ch: string) => s.split(ch).length - 1;
+  while (/^[(\[]/.test(body) && count(body, body[0]) > count(body, body[0] === '(' ? ')' : ']')) {
+    prefix += body[0];
+    body = body.slice(1);
+  }
+  while (/[)\]]$/.test(body)) {
+    const close = body[body.length - 1];
+    if (count(body, close) <= count(body, close === ')' ? '(' : '[')) break;
+    suffix = close + suffix;
+    body = body.slice(0, -1);
+  }
+  // Cả cụm nằm trọn trong một cặp ngoặc, ví dụ "(H2)": ngoặc của câu văn
+  const wrapped = (t: string) => {
+    if (t[0] !== '(' || !t.endsWith(')')) return false;
+    let depth = 0;
+    for (let i = 0; i < t.length; i++) {
+      if (t[i] === '(') depth++;
+      if (t[i] === ')') depth--;
+      if (depth === 0 && i < t.length - 1) return false;
+    }
+    return true;
+  };
+  while (wrapped(body)) {
+    prefix += '(';
+    suffix = `)${suffix}`;
+    body = body.slice(1, -1);
+  }
+  let latex = '';
+  for (const part of body.split(/(<su[bp]>[^<]*<\/su[bp]>)/i)) {
+    if (!part) continue;
+    const script = /^<(su[bp])>([^<]*)<\/su[bp]>$/i.exec(part);
+    const piece = script ? scriptToLatex(script[2]) : baseToLatex(part);
+    if (piece === null) return run;
+    latex += script ? `${script[1].toLowerCase() === 'sub' ? '_' : '^'}{${piece}}` : piece;
+  }
+  return `${prefix}$${latex}$${suffix}`;
+};
+
+const RUN_BASE = '(?:[A-Za-z0-9()\\[\\]Δ]|[-–=≡.](?=[A-Za-z0-9(\\[<]))*';
+const RUN_SCRIPT = '<su[bp]>[^<]*</su[bp]>';
+const FORMULA_RUN_RE = new RegExp(`(?<![\\p{L}\\p{N}$])${RUN_BASE}${RUN_SCRIPT}(?:${RUN_BASE}${RUN_SCRIPT})*${RUN_BASE}(?![\\p{L}\\p{N}])`, 'gu');
+
+const STATE = '(?:\\((?:s|l|g|aq)\\))?';
+const EQ_ITEM = `(?:\\$[^$]+\\$|\\d*(?:[A-Z][A-Za-z0-9()\\[\\]]*|e))${STATE}`;
+const EQ_SEQ_RE = new RegExp(`(?<![\\p{L}\\p{N}$])${EQ_ITEM}(?:\\s*[+→⇌]\\s*${EQ_ITEM})+(?![\\p{L}\\p{N}])`, 'gu');
+
+/** Gộp cả phương trình vào một công thức: $a$ + $b$ → $c$ thành $a + b \rightarrow c$. */
+const mergeEquation = (seq: string): string => {
+  if (!/[→⇌]/.test(seq) && !seq.includes('$')) return seq;
+  const out: string[] = [];
+  // Tách theo dấu nối, không tách dấu + nằm trong công thức đã đổi ($...^{2+}$)
+  for (const tokenMatch of seq.matchAll(/\$[^$]+\$(?:\((?:s|l|g|aq)\))?|[+→⇌]|[^\s+→⇌]+/g)) {
+    const token = tokenMatch[0];
+    if (token === '+') { out.push('+'); continue; }
+    if (token === '→') { out.push('\\rightarrow'); continue; }
+    if (token === '⇌') { out.push('\\rightleftharpoons'); continue; }
+    const m = /^(.*?)(\((?:s|l|g|aq)\))?$/.exec(token)!;
+    const state = m[2] ? `\\mathrm{${m[2]}}` : '';
+    if (m[1].startsWith('$')) { out.push(m[1].slice(1, -1) + state); continue; }
+    const plain = /^(\d*)(.+)$/.exec(m[1]);
+    if (!plain || (plain[2] !== 'e' && !isFormulaBody(plain[2]))) return seq;
+    out.push(`\\mathrm{${m[1]}}${state}`);
+  }
+  return `$${out.join(' ')}$`;
+};
+
+/**
+ * Đổi công thức đang ở dạng chỉ số HTML sang LaTeX $...$. Chỉ gọi khi giáo viên chọn LaTeX hoặc Equation;
+ * chữ thường và công thức không có chỉ số đứng ngoài phương trình giữ nguyên.
+ */
+export const chemHtmlToLatex = (html: string): string => {
+  if (!html) return html;
+  let out = '';
+  let last = 0;
+  const convert = (text: string) =>
+    text.replace(FORMULA_RUN_RE, run => runToLatex(run)).replace(EQ_SEQ_RE, mergeEquation);
+  TAG_SKIP_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = TAG_SKIP_RE.exec(html))) {
+    out += convert(html.slice(last, m.index)) + m[0];
+    last = m.index + m[0].length;
+  }
+  return out + convert(html.slice(last));
+};
+
 /* ---------------------------- Điểm vào ---------------------------- */
 
 /** Chuẩn hóa toàn bộ trình bày hóa học của một đoạn HTML hoặc Markdown. Gọi lại nhiều lần không đổi kết quả. */

@@ -115,7 +115,7 @@ const ShuffleExamPanel: React.FC<{ documents: ShuffleDocument[]; baseName: strin
 
   const downloadVersion = (v: ExamVersion) =>
     run(`Đang tạo mã đề ${v.code}…`, async () => {
-      saveBlob(await contentToDocxBlob(v.content, `${fileBase}_Ma_de_${v.code}`), `${fileBase}_Ma_de_${v.code}.docx`);
+      saveBlob(await contentToDocxBlob(v.content, `${fileBase}_Ma_de_${v.code}`, { examLayout: true, footer: `Mã đề ${v.code}` }), `${fileBase}_Ma_de_${v.code}.docx`);
     });
 
   const downloadKey = () =>
@@ -129,7 +129,7 @@ const ShuffleExamPanel: React.FC<{ documents: ShuffleDocument[]; baseName: strin
       for (let i = 0; i < versions.length; i++) {
         const v = versions[i];
         setBusy(`Đang tạo mã đề ${v.code} (${i + 1}/${versions.length})…`);
-        zip.file(`${fileBase}_Ma_de_${v.code}.docx`, await contentToDocxBlob(v.content, `${fileBase}_Ma_de_${v.code}`));
+        zip.file(`${fileBase}_Ma_de_${v.code}.docx`, await contentToDocxBlob(v.content, `${fileBase}_Ma_de_${v.code}`, { examLayout: true, footer: `Mã đề ${v.code}` }));
       }
       setBusy('Đang tạo file đáp án…');
       zip.file(`${fileBase}_Dap_an.docx`, await answerBlob());

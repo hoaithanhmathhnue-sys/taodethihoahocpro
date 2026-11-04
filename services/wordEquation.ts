@@ -18,18 +18,23 @@
  * ------------------------------------------------------------------
  */
 import katex from 'katex';
+import { chemHtmlToLatex } from './chemFormat';
 import { normalizeMathForWord, encodeNonAsciiToEntities } from './mathExportUtils';
 
-/** Cách ghi công thức khi xuất Word: 'latex' = chữ $...$ (như trước), 'equation' = Equation của Word. */
-export type WordMathFormat = 'latex' | 'equation';
-const MATH_FORMAT_KEY = 'word_math_format';
+/**
+ * Cách ghi công thức khi xuất Word:
+ * 'default' = công thức Hóa giữ dạng chữ có chỉ số trên, dưới (biểu thức phân số vẫn là Equation);
+ * 'latex' = mọi công thức thành chữ $...$; 'equation' = mọi công thức thành Equation của Word (đổi được sang MathType).
+ */
+export type WordMathFormat = 'default' | 'latex' | 'equation';
+const MATH_FORMAT_KEY = 'word_chem_formula_format';
 
 export const getWordMathFormat = (): WordMathFormat => {
   try {
-    // Mặc định Equation: mở Word không còn mã LaTeX thô
-    return localStorage.getItem(MATH_FORMAT_KEY) === 'latex' ? 'latex' : 'equation';
+    const saved = localStorage.getItem(MATH_FORMAT_KEY);
+    return saved === 'latex' || saved === 'equation' ? saved : 'default';
   } catch {
-    return 'equation';
+    return 'default';
   }
 };
 
@@ -356,7 +361,8 @@ export function convertMathSpansToWordEquations(html: string): { html: string; c
  * Thay cho lời gọi normalizeMathForWord(html) ở các hàm xuất Word.
  */
 export function prepareMathForWord(html: string, format: WordMathFormat = getWordMathFormat()): string {
-  if (format !== 'equation') return normalizeMathForWord(html);
+  if (format === 'latex') return normalizeMathForWord(chemHtmlToLatex(html));
+  if (format === 'equation') html = chemHtmlToLatex(html);
   // Đổi sang Equation trước, rồi mới chuyển non-ASCII sang entity (Word giải mã được cả bên trong Equation)
   const { html: out, converted, failed } = convertMathSpansToWordEquations(normalizeMathForWord(html, { encodeEntities: false }));
   if (failed > 0) console.warn(`[WordEquation] ${converted} công thức → Equation; ${failed} công thức giữ dạng $...$ (KaTeX không đọc được).`);

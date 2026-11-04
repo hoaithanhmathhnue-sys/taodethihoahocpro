@@ -35,6 +35,10 @@ Bộ thí nghiệm (chưng cất, chiết, chuẩn độ, điện phân, pin Gal
 
 ## Chế bản
 
+Nhãn "Câu n:" và A, B, C, D (a, b, c, d) in đậm màu xanh, nội dung thụt thẳng hàng theo nhãn, phương trình đứng riêng dòng căn giữa.
+
+Ô **Công thức** có 3 lựa chọn khi xuất Word: Mặc định (chữ có chỉ số trên, dưới), LaTeX ($...$), Equation (đổi được sang MathType).
+
 Khung tiêu đề của đơn vị (lưu cho các lần sau), mã đề đóng khung, chữ kí giám thị, dòng nguyên tử khối theo chất có trong đề, "--- HẾT ---", số trang ở chân trang, khổ A4. Phương án chia 4 cột, 2 cột hoặc 1 cột bằng Tab theo độ dài; mỗi câu nằm trọn trên một trang.
 
 ## Xuất trọn bộ 5 trong 1 (.zip)

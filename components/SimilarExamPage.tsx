@@ -108,7 +108,7 @@ const SimilarExamPage: React.FC<SimilarExamPageProps> = ({ checkAuth }) => {
     const tabLabel = activeTab === 'analysis' ? 'PhanTich' :
       activeTab === 'examContent' ? 'DeThi' : 'LoiGiai';
     const baseName = fileData?.name?.replace(/\.[^/.]+$/, '') || 'export';
-    await exportToDoc(content, `${tabLabel}_${baseName}`);
+    await exportToDoc(content, `${tabLabel}_${baseName}`, { examLayout: activeTab === 'examContent' });
   };
 
   /** Xuất 1 file Word gồm ĐỀ + LỜI GIẢI (lời giải sang trang mới). */
@@ -116,7 +116,7 @@ const SimilarExamPage: React.FC<SimilarExamPageProps> = ({ checkAuth }) => {
     if (!result?.examContent) return;
     const baseName = fileData?.name?.replace(/\.[^/.]+$/, '') || 'export';
     const combined = `${result.examContent}\n\n<div style="page-break-before: always"></div>\n\n## HƯỚNG DẪN GIẢI CHI TIẾT\n\n${result.detailedSolution || ''}`;
-    await exportToDoc(combined, `DeThi_LoiGiai_${baseName}`);
+    await exportToDoc(combined, `DeThi_LoiGiai_${baseName}`, { examLayout: true });
   };
 
   const handleCopy = () => {

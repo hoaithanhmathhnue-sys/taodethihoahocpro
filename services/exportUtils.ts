@@ -1,8 +1,8 @@
 import MarkdownIt from 'markdown-it';
 import { renderMarkdownPreservingMath } from './mathExportUtils';
-import { prepareMathForWord } from './wordEquation';
+import { getWordMathFormat, prepareMathForWord } from './wordEquation';
 import { extractFiguresToPlaceholders, restoreFiguresAsPngForWord } from './figureEngine';
-import { normalizeChemText } from './chemFormat';
+import { chemHtmlToLatex, normalizeChemText } from './chemFormat';
 import { layoutExamForPrint } from './examLayout';
 import JSZip from 'jszip';
 // @ts-ignore
@@ -26,7 +26,9 @@ const buildWordHtml = async (content: string, fileName: string, opts: WordExport
   let fullHtml = '';
   const { text: contentWithoutFigures, figures } = extractFiguresToPlaceholders(normalizeChemText(content));
   const stripped = contentWithoutFigures.replace(/^```html\s*/i, '').replace(/\s*```$/i, '').trim();
-  const cleanedContent = opts.examLayout ? layoutExamForPrint(stripped) : stripped;
+  // Chọn LaTeX: đổi công thức trước khi chia cột để đo đúng độ dài chữ sẽ hiện trong Word
+  const applyLayout = (html: string) =>
+    opts.examLayout ? layoutExamForPrint(getWordMathFormat() === 'latex' ? chemHtmlToLatex(html) : html) : html;
 
   const wordCss = `
     body, p, div, li, td, th, span { font-family: 'Times New Roman', serif; }
@@ -40,8 +42,8 @@ const buildWordHtml = async (content: string, fileName: string, opts: WordExport
     .question-number { font-weight: bold; }
   `;
 
-  if (cleanedContent.includes('<!DOCTYPE html>') || (cleanedContent.includes('<html') && cleanedContent.includes('<body'))) {
-    fullHtml = cleanedContent.replace(
+  if (stripped.includes('<!DOCTYPE html>') || (stripped.includes('<html') && stripped.includes('<body'))) {
+    fullHtml = applyLayout(stripped).replace(
       /<\/style>/i,
       `
         table { page-break-inside: auto; border-collapse: collapse; width: 100%; margin-bottom: 1rem; }
@@ -54,7 +56,7 @@ const buildWordHtml = async (content: string, fileName: string, opts: WordExport
     );
   } else {
     // Render markdown to HTML — tạm cất LaTeX để markdown-it không làm hỏng (\\, \{, \[ ...)
-    const htmlBody = renderMarkdownPreservingMath(md, cleanedContent);
+    const htmlBody = applyLayout(renderMarkdownPreservingMath(md, stripped));
 
     const css = `
       <style>
@@ -127,6 +129,9 @@ const buildWordHtml = async (content: string, fileName: string, opts: WordExport
       return `<${tag}${attrs}><p style="${style}">${inner}</p></${tag}>`;
     },
   );
+
+  // Word bỏ qua khối rỗng có page-break-before: dùng dấu ngắt trang Word đọc được để mỗi đề sang trang mới
+  fullHtml = fullHtml.replace(/<div\b[^>]*page-break-before\s*:\s*always[^>]*>\s*<\/div>/gi, '<br clear="all" style="page-break-before:always" />');
 
   // Chuẩn hoá công thức cho Word: LaTeX $...$ hoặc Equation (theo lựa chọn của giáo viên)
   fullHtml = prepareMathForWord(fullHtml);
