@@ -7,8 +7,6 @@ export const APP_INFO = {
   author: 'Thầy Nguyễn Thanh Phong',
   school: 'TRƯỜNG THPT NGUYỄN THƯỢNG HIỀN',
   specialty: 'CHUYÊN MÔN HÓA HỌC GDPT 2018',
-  // Số Zalo nhận mua tài khoản: giữ theo bản cũ, đổi tại đây nếu chuyển người phụ trách
-  contactZalo: '0348296773',
 };
 
 /** Môn duy nhất của app */

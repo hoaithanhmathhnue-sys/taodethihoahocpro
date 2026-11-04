@@ -12,11 +12,7 @@ import { VariantFileData, VariantState } from '../types';
 import { getApiKey, getFriendlyGeminiErrorMessage, parseApiError, getAiProvider, getGeminiModelsToTry, getSelectedModel, setFallbackNotice, UserFacingError } from '../services/geminiService';
 import { prepareExamSourceParts, isDocxSource } from '../services/examSourceService';
 
-interface VariantsExamPageProps {
-  checkAuth: () => boolean;
-}
-
-const VariantsExamPage: React.FC<VariantsExamPageProps> = ({ checkAuth }) => {
+const VariantsExamPage: React.FC = () => {
   const [file, setFile] = useState<VariantFileData | null>(null);
   const [col1, setCol1] = useState('');
   const [col2, setCol2] = useState('');
@@ -95,7 +91,6 @@ const VariantsExamPage: React.FC<VariantsExamPageProps> = ({ checkAuth }) => {
   /** Chạy quy trình từ bước `fromStep` (1 = từ đầu). Các đề trước bước đó được giữ nguyên. */
   const runFrom = async (fromStep: 1 | 2 | 3) => {
     if (!file) return;
-    if (!checkAuth()) return;
 
     const provider = getAiProvider();
     const models = getGeminiModelsToTry(getSelectedModel(), provider);

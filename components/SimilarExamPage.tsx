@@ -11,11 +11,7 @@ import { SimilarExamResult, SimilarExamFileData, DiagramMode, SolutionMode } fro
 import { getSelectedModel } from '../services/geminiService';
 import { prepareExamSourceParts, isDocxSource } from '../services/examSourceService';
 
-interface SimilarExamPageProps {
-  checkAuth: () => boolean;
-}
-
-const SimilarExamPage: React.FC<SimilarExamPageProps> = ({ checkAuth }) => {
+const SimilarExamPage: React.FC = () => {
   const [status, setStatus] = useState<'idle' | 'analyzing' | 'success' | 'error'>('idle');
   const [result, setResult] = useState<SimilarExamResult | null>(null);
   const [activeTab, setActiveTab] = useState<'analysis' | 'examContent' | 'detailedSolution'>('analysis');
@@ -48,7 +44,6 @@ const SimilarExamPage: React.FC<SimilarExamPageProps> = ({ checkAuth }) => {
 
   const handleGenerate = async () => {
     if (!fileData || isGenerating) return;
-    if (!checkAuth()) return;
 
     // Sinh lại khi đã có kết quả: GIỮ kết quả cũ trên màn hình cho tới khi có đề mới (lỗi thì không mất đề cũ)
     const hadResult = !!result && status === 'success';
