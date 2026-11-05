@@ -4,6 +4,7 @@ import { createGoogleAiClient, getAiProvider, createGeminiConfig, wasTruncated }
 import { AiProvider, GEMINI_MODELS, AGENT_PLATFORM_MODELS, CHEM_EXAM_RULES } from "../constants";
 import { FIGURE_JSON_MARKDOWN_INSTRUCTIONS } from "./figureEngine";
 import { prepareExamSourceParts } from "./examSourceService";
+import { VARIANT_DIFFICULTY_RULES, VariantDifficultyMode, buildVariantStepPrompt } from "./variantDifficulty";
 
 const VARIANTS_SYSTEM_INSTRUCTION = `
 # SINH ĐỀ HÓA HỌC BIẾN THỂ TỰ ĐỘNG
@@ -14,9 +15,11 @@ Bạn là giáo viên Hóa học THPT giàu kinh nghiệm soạn đề.
 
 ## NHIỆM VỤ
 Quy trình làm việc chia làm 3 bước độc lập. Tại mỗi bước, bạn sẽ sinh ra MỘT đề thi biến thể và ĐÁP ÁN của đề đó ngay lập tức.
-Mỗi đề biến thể giữ NGUYÊN cấu trúc đề gốc: cùng số phần, cùng số câu từng phần, cùng dạng câu (trắc nghiệm 4 phương án, Đúng – Sai 4 ý a–d, trả lời ngắn, tự luận), cùng thang điểm và mức độ từng câu; chỉ thay số liệu / chất cùng nhóm / bối cảnh / cách hỏi.
+Mỗi đề biến thể giữ NGUYÊN cấu trúc đề gốc: cùng số phần, cùng số câu từng phần, cùng dạng câu (trắc nghiệm 4 phương án, Đúng – Sai 4 ý a–d, trả lời ngắn, tự luận), cùng thang điểm và cùng mức độ nhận thức (Biết/Hiểu/Vận dụng) ở từng vị trí câu. Được đổi số liệu, chất, bối cảnh, cách hỏi và cách cho dữ kiện để đạt độ khó yêu cầu ở mỗi bước.
 Đánh số câu "Câu 1", "Câu 2"… như đề gốc.
 
+---
+${VARIANT_DIFFICULTY_RULES}
 ---
 
 ## QUY TẮC TRÌNH BÀY (BẮT BUỘC)
@@ -71,7 +74,8 @@ export const createVariantSession = (
       provider,
       model: selectedModel,
       systemInstruction: VARIANTS_SYSTEM_INSTRUCTION,
-      thinkingLevel: ThinkingLevel.MEDIUM,
+      // HIGH: phải đối chiếu độ khó từng câu với đề gốc và tự giải lại số liệu mới
+      thinkingLevel: ThinkingLevel.HIGH,
       maxOutputTokens: 32768,
     }),
   });
@@ -98,7 +102,7 @@ export const cloneVariantSession = async (
       provider,
       model: newModel,
       systemInstruction: VARIANTS_SYSTEM_INSTRUCTION,
-      thinkingLevel: ThinkingLevel.MEDIUM,
+      thinkingLevel: ThinkingLevel.HIGH,
       maxOutputTokens: 32768,
     }),
   });
@@ -136,20 +140,13 @@ const streamWithContinuation = async (
 export const generateVariantStep1 = async (
   chat: Chat,
   file: VariantFileData,
+  mode: VariantDifficultyMode,
   onChunk: (text: string) => void
 ): Promise<void> => {
   // PDF/ảnh gửi nguyên file; Word .docx được app đọc trước (bảng, công thức LaTeX, hình)
   const sourceParts = await prepareExamSourceParts(file.data, file.type, file.name);
 
-  const textPart: Part = {
-    text: `BƯỚC 1:
-Dựa vào file đề gốc, hãy sinh ra **ĐỀ BIẾN THỂ SỐ 1**.
-Ngay sau đó, viết **ĐÁP ÁN CHI TIẾT CHO ĐỀ SỐ 1**.
-
-Yêu cầu:
-- Đề thi: Đủ số lượng câu như đề gốc, đúng môn học và khối lớp của đề gốc. Đầy đủ nội dung.
-- Đáp án: Câu dễ chỉ cần đáp án (1.A). Câu khó phải có lời giải vắn tắt.`
-  };
+  const textPart: Part = { text: buildVariantStepPrompt(1, mode) };
 
   try {
     await streamWithContinuation(chat, [...sourceParts, textPart], onChunk);
@@ -163,15 +160,10 @@ Yêu cầu:
 export const generateVariantNextStep = async (
   chat: Chat,
   stepNumber: number,
+  mode: VariantDifficultyMode,
   onChunk: (text: string) => void
 ): Promise<void> => {
-  const prompt = `BƯỚC ${stepNumber}:
-Tiếp tục sinh ra **ĐỀ BIẾN THỂ SỐ ${stepNumber}** (Khác số liệu/cách hỏi so với các đề trước).
-Ngay sau đó, viết **ĐÁP ÁN CHI TIẾT CHO ĐỀ SỐ ${stepNumber}**.
-
-Yêu cầu:
-- Đề thi: Đủ số lượng câu và đúng cấu trúc như đề gốc (không ít hơn, không nhiều hơn).
-- Đáp án: Câu dễ chỉ cần đáp án. Câu khó phải có lời giải vắn tắt.`;
+  const prompt = buildVariantStepPrompt(stepNumber, mode);
 
   try {
     await streamWithContinuation(chat, prompt, onChunk);

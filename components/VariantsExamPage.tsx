@@ -11,9 +11,11 @@ import ShuffleExamPanel from './ShuffleExamPanel';
 import { VariantFileData, VariantState } from '../types';
 import { getApiKey, getFriendlyGeminiErrorMessage, parseApiError, getAiProvider, getGeminiModelsToTry, getSelectedModel, setFallbackNotice, UserFacingError } from '../services/geminiService';
 import { prepareExamSourceParts, isDocxSource } from '../services/examSourceService';
+import { VARIANT_DIFFICULTY_MODES, VARIANT_LEVEL_LABELS, VariantDifficultyMode, getVariantLevel } from '../services/variantDifficulty';
 
 const VariantsExamPage: React.FC = () => {
   const [file, setFile] = useState<VariantFileData | null>(null);
+  const [difficultyMode, setDifficultyMode] = useState<VariantDifficultyMode>('progressive');
   const [col1, setCol1] = useState('');
   const [col2, setCol2] = useState('');
   const [col3, setCol3] = useState('');
@@ -121,8 +123,8 @@ const VariantsExamPage: React.FC = () => {
         await executeStepWithRetry(
           `Step ${step}`,
           async (chat) => {
-            if (step === 1) await generateVariantStep1(chat, file, (chunk) => setCol(prev => prev + chunk));
-            else await generateVariantNextStep(chat, step, (chunk) => setCol(prev => prev + chunk));
+            if (step === 1) await generateVariantStep1(chat, file, difficultyMode, (chunk) => setCol(prev => prev + chunk));
+            else await generateVariantNextStep(chat, step, difficultyMode, (chunk) => setCol(prev => prev + chunk));
           },
           () => setCol('')
         );
@@ -187,6 +189,22 @@ const VariantsExamPage: React.FC = () => {
             allowDocx
           />
 
+          <label className="block mt-5">
+            <span className="block text-sm font-bold text-teal-900 mb-1.5">Độ khó so với đề gốc</span>
+            <select
+              value={difficultyMode}
+              onChange={e => setDifficultyMode(e.target.value as VariantDifficultyMode)}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white text-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-teal-400"
+            >
+              {VARIANT_DIFFICULTY_MODES.map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+            <span className="block text-xs text-slate-500 mt-1.5">
+              {VARIANT_DIFFICULTY_MODES.find(m => m.id === difficultyMode)?.help}
+            </span>
+          </label>
+
           <button
             onClick={runProcess}
             disabled={!file}
@@ -214,6 +232,7 @@ const VariantsExamPage: React.FC = () => {
             <div key={i} className="card-elevated p-4 flex flex-col items-center gap-2">
               <div className="w-10 h-10 rounded-full badge-section text-white flex items-center justify-center font-bold">{i + 1}</div>
               <p className="text-sm font-medium text-teal-800">{label}</p>
+              <p className="text-xs text-slate-500">{VARIANT_LEVEL_LABELS[getVariantLevel(difficultyMode, i + 1)]}</p>
             </div>
           ))}
         </div>
@@ -356,9 +375,9 @@ const VariantsExamPage: React.FC = () => {
 
       {/* 3 Column Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0">
-        {renderColumn("Bước 1: Đề & Đáp Án Đề 1", col1, VariantState.PROCESSING_STEP_1, "Chờ xử lý...")}
-        {renderColumn("Bước 2: Đề & Đáp Án Đề 2", col2, VariantState.PROCESSING_STEP_2, "Chờ Bước 1...")}
-        {renderColumn("Bước 3: Đề & Đáp Án Đề 3", col3, VariantState.PROCESSING_STEP_3, "Chờ Bước 2...")}
+        {renderColumn(`Bước 1: Đề & Đáp Án Đề 1 · ${VARIANT_LEVEL_LABELS[getVariantLevel(difficultyMode, 1)]}`, col1, VariantState.PROCESSING_STEP_1, "Chờ xử lý...")}
+        {renderColumn(`Bước 2: Đề & Đáp Án Đề 2 · ${VARIANT_LEVEL_LABELS[getVariantLevel(difficultyMode, 2)]}`, col2, VariantState.PROCESSING_STEP_2, "Chờ Bước 1...")}
+        {renderColumn(`Bước 3: Đề & Đáp Án Đề 3 · ${VARIANT_LEVEL_LABELS[getVariantLevel(difficultyMode, 3)]}`, col3, VariantState.PROCESSING_STEP_3, "Chờ Bước 2...")}
       </div>
     </div>
   );

@@ -25,6 +25,7 @@ const out = await build({
       export * from './services/examShuffle.ts';
       export * from './services/xlsxWriter.ts';
       export * from './services/answerSheet.ts';
+      export * from './services/variantDifficulty.ts';
       export { computeCv7991Layout } from './services/cv7991Template.ts';
       export { validateExamHtml } from './services/examValidator.ts';
     `,
@@ -466,6 +467,21 @@ await t('Phiếu trả lời khớp số câu của đề, nằm trong khổ A4'
   assert.ok(m.buildAnswerSheetPages(m.DEFAULT_HEADER_PROFILE, { mc: 12, tf: 2, short: 4, essay: 3 }, 'x').join('').includes('Tự luận (3 câu)'));
   // Đề nhiều câu: sang trang mới thay vì tràn
   assert.ok(m.buildAnswerSheetPages(m.DEFAULT_HEADER_PROFILE, { mc: 40, tf: 8, short: 12, essay: 0 }, 'x').length >= 2);
+});
+
+/* ---------- Độ khó đề biến thể ---------- */
+await t('Đề biến thể: mức độ khó từng đề theo lựa chọn, luôn đối chiếu với đề gốc', () => {
+  assert.deepEqual([1, 2, 3].map(s => m.getVariantLevel('progressive', s)), ['equal', 'harder', 'hardest']);
+  assert.deepEqual([1, 2, 3].map(s => m.getVariantLevel('same', s)), ['equal', 'equal', 'equal']);
+  const prompts = [1, 2, 3].map(s => m.buildVariantStepPrompt(s, 'progressive'));
+  assert.ok(prompts[0].includes('TƯƠNG ĐƯƠNG ĐỀ GỐC'));
+  assert.ok(prompts[1].includes('KHÓ HƠN ĐỀ GỐC'));
+  assert.ok(prompts[2].includes('KHÓ HƠN RÕ RỆT'));
+  // Đề 2, Đề 3 phải lấy đề gốc làm mốc, không lấy đề biến thể trước đó
+  [prompts[1], prompts[2]].forEach(p => assert.ok(p.includes('Mốc so sánh độ khó là ĐỀ GỐC')));
+  assert.ok(m.buildVariantStepPrompt(3, 'same').includes('TƯƠNG ĐƯƠNG ĐỀ GỐC'));
+  prompts.forEach((p, i) => assert.ok(p.includes(`ĐỀ BIẾN THỂ SỐ ${i + 1}`)));
+  assert.ok(m.VARIANT_DIFFICULTY_RULES.includes('dễ hơn câu cùng vị trí'));
 });
 
 console.log(`\n${ok} kiểm thử đạt.`);
